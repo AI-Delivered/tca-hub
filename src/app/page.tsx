@@ -75,6 +75,41 @@ function CyclingText() {
   )
 }
 
+function TitansT() {
+  return (
+    <svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="navyGrad" x1="36" y1="8" x2="36" y2="64" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#2e4d8a" />
+          <stop offset="100%" stopColor="#1a2d5a" />
+        </linearGradient>
+        <filter id="tShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="3" stdDeviation="4" floodColor="#1a2d5a" floodOpacity="0.22" />
+        </filter>
+      </defs>
+
+      {/* Crossbar with flared ends — evoking the sword crossguard */}
+      <path
+        d="M7 16 L14 11 L58 11 L65 16 L65 23 L58 28 L14 28 L7 23 Z"
+        fill="url(#navyGrad)"
+        filter="url(#tShadow)"
+      />
+
+      {/* Vertical stem */}
+      <rect x="28" y="27" width="16" height="34" rx="1.5" fill="url(#navyGrad)" filter="url(#tShadow)" />
+
+      {/* Crimson base accent */}
+      <rect x="26" y="59" width="20" height="3" rx="1.5" fill="#b91c3a" />
+
+      {/* Highlight on crossbar top */}
+      <path
+        d="M14 11 L58 11 L65 16 L58 13 L14 13 L7 16 Z"
+        fill="rgba(255,255,255,0.12)"
+      />
+    </svg>
+  )
+}
+
 function SearchIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -169,7 +204,7 @@ export default function Home() {
         >
           {/* Orb + wordmark */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
-            <div className="tca-orb" />
+            <TitansT />
             <div style={{ textAlign: 'center' }}>
               <p
                 style={{
