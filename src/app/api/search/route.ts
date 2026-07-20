@@ -7,21 +7,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Query required' }, { status: 400 })
   }
 
-  const [{ default: OpenAI }, { default: Anthropic }] = await Promise.all([
-    import('openai'),
+  const [{ VoyageAIClient }, { default: Anthropic }] = await Promise.all([
+    import('voyageai'),
     import('@anthropic-ai/sdk'),
   ])
 
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   const supabase = getSupabaseAdmin()
 
   // Embed the query
-  const embeddingRes = await openai.embeddings.create({
-    model: 'text-embedding-3-small',
-    input: query.slice(0, 8000),
-  })
-  const queryEmbedding = embeddingRes.data[0].embedding
+  const embeddingRes = await voyage.embed({ input: [query.slice(0, 16000)], model: 'voyage-3-lite' })
+  const queryEmbedding = embeddingRes.data![0].embedding!
 
   // Find the most relevant chunks
   const { data: chunks, error } = await supabase.rpc('match_chunks', {

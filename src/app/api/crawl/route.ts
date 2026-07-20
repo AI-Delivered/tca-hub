@@ -12,13 +12,10 @@ function chunkText(text: string, chunkSize = 1800, overlap = 200): string[] {
 }
 
 async function embedText(text: string): Promise<number[]> {
-  const { default: OpenAI } = await import('openai')
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  const res = await openai.embeddings.create({
-    model: 'text-embedding-3-small',
-    input: text.slice(0, 8000),
-  })
-  return res.data[0].embedding
+  const { VoyageAIClient } = await import('voyageai')
+  const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })
+  const res = await voyage.embed({ input: [text.slice(0, 16000)], model: 'voyage-3-lite' })
+  return res.data![0].embedding!
 }
 
 function isAuthorized(req: NextRequest): boolean {
