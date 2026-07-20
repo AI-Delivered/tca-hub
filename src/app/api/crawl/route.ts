@@ -1,9 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import FirecrawlApp from '@mendable/firecrawl-js'
-import OpenAI from 'openai'
 import { getSupabaseAdmin } from '@/lib/supabase'
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 function chunkText(text: string, chunkSize = 1800, overlap = 200): string[] {
   const chunks: string[] = []
@@ -16,6 +12,8 @@ function chunkText(text: string, chunkSize = 1800, overlap = 200): string[] {
 }
 
 async function embedText(text: string): Promise<number[]> {
+  const { default: OpenAI } = await import('openai')
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   const res = await openai.embeddings.create({
     model: 'text-embedding-3-small',
     input: text.slice(0, 8000),
@@ -47,6 +45,7 @@ export async function POST(req: NextRequest) {
 }
 
 async function runCrawl() {
+  const { default: FirecrawlApp } = await import('@mendable/firecrawl-js')
   const firecrawl = new FirecrawlApp({ apiKey: process.env.FIRECRAWL_API_KEY })
   const supabase = getSupabaseAdmin()
   const targetUrl = process.env.CRAWL_TARGET_URL ?? 'https://www.tcatitans.org'
@@ -54,16 +53,20 @@ async function runCrawl() {
   let indexed = 0
   let errors = 0
 
-  const crawlResult = await firecrawl.crawlUrl(targetUrl, {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const crawlResult = await (firecrawl.crawlUrl as any)(targetUrl, {
     limit: 300,
     scrapeOptions: { formats: ['markdown'] },
   })
 
-  if (!crawlResult.success || !crawlResult.data) {
-    return NextResponse.json({ error: 'Crawl failed' }, { status: 500 })
+  const pages = Array.isArray(crawlResult) ? crawlResult
+    : crawlResult?.data ?? []
+
+  if (!pages.length) {
+    return NextResponse.json({ error: 'Crawl returned no pages' }, { status: 500 })
   }
 
-  for (const page of crawlResult.data) {
+  for (const page of pages) {
     const url = page.metadata?.sourceURL ?? ''
     const title = page.metadata?.title ?? ''
     const content = page.markdown ?? ''
@@ -83,5 +86,5 @@ async function runCrawl() {
     }
   }
 
-  return NextResponse.json({ indexed, errors, pages: crawlResult.data.length })
+  return NextResponse.json({ indexed, errors, pages: pages.length })
 }

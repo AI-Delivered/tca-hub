@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import OpenAI from 'openai'
-import Anthropic from '@anthropic-ai/sdk'
 import { getSupabaseAdmin } from '@/lib/supabase'
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
 export async function POST(req: NextRequest) {
   const { query } = await req.json()
@@ -12,6 +7,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Query required' }, { status: 400 })
   }
 
+  const [{ default: OpenAI }, { default: Anthropic }] = await Promise.all([
+    import('openai'),
+    import('@anthropic-ai/sdk'),
+  ])
+
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   const supabase = getSupabaseAdmin()
 
   // Embed the query
@@ -38,14 +40,12 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  // Build context from matched chunks
   const context = chunks
     .map((c: { title: string; url: string; content: string }, i: number) =>
       `[Source ${i + 1}: ${c.title} (${c.url})]\n${c.content}`
     )
     .join('\n\n---\n\n')
 
-  // Ask Claude to synthesize an answer
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-5',
     max_tokens: 512,
@@ -63,7 +63,6 @@ If the context doesn't contain enough information, say so and suggest the user v
 
   const answer = message.content[0].type === 'text' ? message.content[0].text : ''
 
-  // Deduplicate sources
   const seen = new Set<string>()
   const sources = chunks
     .filter((c: { url: string }) => {
