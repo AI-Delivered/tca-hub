@@ -4,20 +4,20 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 
 const SUGGESTIONS = [
   'the bell schedule',
-  'how to report an absence',
-  'the dress code policy',
-  'school supply lists',
+  'reporting an absence',
+  'dress code',
+  'supply lists',
   'lunch information',
   'the staff directory',
   'parking permits',
   'upcoming events',
-  'enrollment information',
+  'enrollment',
   'school hours',
-  'the student handbook',
-  'high school course offerings',
-  'summer reading lists',
+  'the handbook',
+  'HS course offerings',
+  'summer reading',
   'when school starts',
-  'board meeting agendas',
+  'board agendas',
 ]
 
 interface Source {
@@ -53,7 +53,7 @@ function CyclingText() {
     } else {
       if (displayText.length > 0) {
         setDisplayText(displayText.slice(0, -1))
-        frameRef.current = setTimeout(tick, 32)
+        frameRef.current = setTimeout(tick, 16)
       } else {
         setSuggestionIndex(i => (i + 1) % SUGGESTIONS.length)
         setPhase('typing')
@@ -185,11 +185,12 @@ export default function Home() {
               </p>
               <h1
                 style={{
-                  fontSize: 'clamp(28px, 5vw, 42px)',
+                  fontSize: 'clamp(22px, 4vw, 34px)',
                   fontWeight: 300,
                   letterSpacing: '-0.02em',
                   color: 'var(--text-primary)',
                   lineHeight: 1.15,
+                  whiteSpace: 'nowrap',
                 }}
               >
                 {result || loading ? (

@@ -146,10 +146,10 @@ body {
 .tca-cycle-cursor {
   display: inline-block;
   width: 2px;
-  height: 0.85em;
+  height: 0.75em;
   background: var(--crimson);
   margin-left: 2px;
-  vertical-align: text-bottom;
+  vertical-align: -0.1em;
   animation: blink 1s step-end infinite;
 }
 
