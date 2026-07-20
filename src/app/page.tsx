@@ -210,7 +210,7 @@ export default function Home() {
                 alt="TCA Titans"
                 width={80}
                 height={85}
-                style={{ objectFit: 'contain' }}
+                style={{ objectFit: 'contain', width: 'clamp(56px, 14vw, 80px)', height: 'auto' }}
                 priority
               />
             <div style={{ textAlign: 'center' }}>
@@ -228,11 +228,11 @@ export default function Home() {
               </p>
               <h1
                 style={{
-                  fontSize: 'clamp(22px, 4vw, 34px)',
+                  fontSize: 'clamp(22px, 5vw, 34px)',
                   fontWeight: 300,
                   letterSpacing: '-0.02em',
                   color: 'var(--text-primary)',
-                  lineHeight: 1.15,
+                  lineHeight: 1.2,
                   whiteSpace: 'nowrap',
                 }}
               >
