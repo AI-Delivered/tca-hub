@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import Image from 'next/image'
 
 const SUGGESTIONS = [
   'the bell schedule',
@@ -204,7 +205,14 @@ export default function Home() {
         >
           {/* Orb + wordmark */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
-            <TitansT />
+            <Image
+                src="/tca-logo.png"
+                alt="TCA Titans"
+                width={80}
+                height={85}
+                style={{ objectFit: 'contain' }}
+                priority
+              />
             <div style={{ textAlign: 'center' }}>
               <p
                 style={{
