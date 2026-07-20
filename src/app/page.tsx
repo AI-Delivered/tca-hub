@@ -69,7 +69,7 @@ function CyclingText() {
 
   return (
     <span>
-      <span style={{ color: 'var(--accent)' }}>{displayText}</span>
+      <span style={{ color: 'var(--crimson)' }}>{displayText}</span>
       <span className="tca-cycle-cursor" aria-hidden="true" />
     </span>
   )
@@ -261,29 +261,7 @@ export default function Home() {
                 <button
                   key={s}
                   onClick={() => handleSuggestionClick(s)}
-                  style={{
-                    background: 'var(--glass)',
-                    border: '1px solid var(--border)',
-                    borderRadius: '100px',
-                    padding: '6px 14px',
-                    fontSize: '12px',
-                    color: 'var(--text-muted)',
-                    cursor: 'pointer',
-                    transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-                    fontFamily: 'inherit',
-                  }}
-                  onMouseEnter={e => {
-                    const el = e.currentTarget
-                    el.style.background = 'var(--glass-hover)'
-                    el.style.color = 'var(--text-primary)'
-                    el.style.borderColor = 'rgba(255,255,255,0.15)'
-                  }}
-                  onMouseLeave={e => {
-                    const el = e.currentTarget
-                    el.style.background = 'var(--glass)'
-                    el.style.color = 'var(--text-muted)'
-                    el.style.borderColor = 'var(--border)'
-                  }}
+                  className="tca-chip"
                 >
                   {s}
                 </button>
@@ -299,10 +277,10 @@ export default function Home() {
               maxWidth: '640px',
               width: '100%',
               padding: '14px 20px',
-              background: 'rgba(255, 60, 60, 0.08)',
-              border: '1px solid rgba(255, 60, 60, 0.2)',
+              background: 'rgba(185, 28, 58, 0.06)',
+              border: '1px solid rgba(185, 28, 58, 0.2)',
               borderRadius: '14px',
-              color: '#ff8080',
+              color: 'var(--crimson)',
               fontSize: '14px',
             }}
           >
@@ -380,7 +358,7 @@ export default function Home() {
                 fontFamily: 'inherit',
                 transition: 'color 0.15s',
               }}
-              onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-muted)' }}
+              onMouseEnter={e => { e.currentTarget.style.color = 'var(--navy)' }}
               onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-dim)' }}
             >
               ← New search
