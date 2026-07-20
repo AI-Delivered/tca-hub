@@ -19,25 +19,17 @@ async function embedText(text: string): Promise<number[]> {
 }
 
 function isAuthorized(req: NextRequest): boolean {
-  // Vercel cron sends this header automatically
   if (req.headers.get('x-vercel-cron') === '1') return true
-  // Manual trigger requires Bearer secret
   return req.headers.get('authorization') === `Bearer ${process.env.CRAWL_SECRET}`
 }
 
-// GET handler for Vercel cron
 export async function GET(req: NextRequest) {
-  if (!isAuthorized(req)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  if (!isAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   return runCrawl()
 }
 
 export async function POST(req: NextRequest) {
-  if (!isAuthorized(req)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
+  if (!isAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   return runCrawl()
 }
 
@@ -47,21 +39,41 @@ async function runCrawl() {
   const supabase = getSupabaseAdmin()
   const targetUrl = process.env.CRAWL_TARGET_URL ?? 'https://www.tcatitans.org'
 
-  let indexed = 0
-  let errors = 0
-
+  // Start async crawl job
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const crawlResult = await (firecrawl.crawlUrl as any)(targetUrl, {
+  const job = await (firecrawl.asyncCrawlUrl as any)(targetUrl, {
     limit: 300,
     scrapeOptions: { formats: ['markdown'] },
   })
 
-  const pages = Array.isArray(crawlResult) ? crawlResult
-    : crawlResult?.data ?? []
+  if (!job?.id) {
+    return NextResponse.json({ error: 'Failed to start crawl job', job }, { status: 500 })
+  }
+
+  // Poll for completion (max 4 min)
+  const jobId = job.id
+  let pages: any[] = []
+  const deadline = Date.now() + 4 * 60 * 1000
+
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 8000))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const status = await (firecrawl.checkCrawlStatus as any)(jobId)
+    if (status?.status === 'completed') {
+      pages = status.data ?? []
+      break
+    }
+    if (status?.status === 'failed') {
+      return NextResponse.json({ error: 'Crawl job failed', status }, { status: 500 })
+    }
+  }
 
   if (!pages.length) {
-    return NextResponse.json({ error: 'Crawl returned no pages' }, { status: 500 })
+    return NextResponse.json({ error: 'No pages returned or crawl timed out', jobId }, { status: 500 })
   }
+
+  let indexed = 0
+  let errors = 0
 
   for (const page of pages) {
     const url = page.metadata?.sourceURL ?? ''
@@ -83,5 +95,5 @@ async function runCrawl() {
     }
   }
 
-  return NextResponse.json({ indexed, errors, pages: pages.length })
+  return NextResponse.json({ indexed, errors, pages: pages.length, jobId })
 }
