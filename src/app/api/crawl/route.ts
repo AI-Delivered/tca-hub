@@ -17,7 +17,10 @@ export async function POST(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const job = await (firecrawl.asyncCrawlUrl as any)(targetUrl, {
     limit: 300,
-    scrapeOptions: { formats: ['markdown'] },
+    scrapeOptions: {
+      formats: ['markdown'],
+      parsePDF: true,
+    },
   })
 
   if (!job?.id) {
