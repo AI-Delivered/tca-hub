@@ -182,12 +182,12 @@ export default function Home() {
         style={{
           position: 'relative',
           zIndex: 1,
-          minHeight: '100vh',
+          minHeight: 'calc(100vh - 80px)',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: result || loading ? 'flex-start' : 'center',
-          padding: result || loading ? '60px 20px 80px' : '0 20px',
+          padding: result || loading ? '60px 20px 60px' : '0 20px',
           transition: 'justify-content 0.3s',
         }}
       >
