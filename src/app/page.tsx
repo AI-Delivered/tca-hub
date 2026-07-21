@@ -175,14 +175,14 @@ export default function Home() {
   }
 
   return (
-    <>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
       <div className="tca-bg-glow" />
 
       <main
         style={{
           position: 'relative',
           zIndex: 1,
-          minHeight: 'calc(100vh - 80px)',
+          flex: 1,
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
@@ -418,6 +418,8 @@ export default function Home() {
           textAlign: 'center',
           padding: '24px 20px 32px',
           borderTop: '1px solid var(--border)',
+          marginTop: 'auto',
+          flexShrink: 0,
         }}
       >
         <p style={{ fontSize: '13px', color: 'var(--text-dim)', lineHeight: 1.6 }}>
@@ -434,6 +436,6 @@ export default function Home() {
           </a>
         </p>
       </footer>
-    </>
+    </div>
   )
 }
