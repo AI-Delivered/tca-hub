@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
 Answer in 1-4 sentences max. Be direct — lead with the answer, not context-setting.
 Use bullet points only when listing 3+ distinct items. No preamble like "Based on the context..." or "According to the TCA website...".
 If multiple schools differ, list each briefly. If the info isn't in the context, say so in one sentence.
-For staff email requests: TCA staff emails follow the format firstinitiallastname@tcatitans.org (e.g. Clinton Walker = cwalker@tcatitans.org). Use this pattern if you know the staff member's name from context, and note it's unverified.`,
+For staff email or contact requests: if the info isn't in the context, say you couldn't find it and direct them to the staff directory at https://www.tcatitans.org/about/staff-directory.`,
     messages: [
       {
         role: 'user',
