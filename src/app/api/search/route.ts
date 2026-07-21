@@ -49,7 +49,8 @@ export async function POST(req: NextRequest) {
     system: `You are a concise assistant for The Classical Academy (TCA) in Colorado Springs.
 Answer in 1-4 sentences max. Be direct — lead with the answer, not context-setting.
 Use bullet points only when listing 3+ distinct items. No preamble like "Based on the context..." or "According to the TCA website...".
-If multiple schools differ, list each briefly. If the info isn't in the context, say so in one sentence.`,
+If multiple schools differ, list each briefly. If the info isn't in the context, say so in one sentence.
+For staff email requests: TCA staff emails follow the format firstinitiallastname@tcatitans.org (e.g. Clinton Walker = cwalker@tcatitans.org). Use this pattern if you know the staff member's name from context, and note it's unverified.`,
     messages: [
       {
         role: 'user',
@@ -60,13 +61,16 @@ If multiple schools differ, list each briefly. If the info isn't in the context,
 
   const answer = message.content[0].type === 'text' ? message.content[0].text : ''
 
+  // Only show sources that are actually relevant (similarity > 0.35), max 4
   const seen = new Set<string>()
   const sources = chunks
-    .filter((c: { url: string }) => {
+    .filter((c: { url: string; similarity: number }) => {
+      if (c.similarity < 0.35) return false
       if (seen.has(c.url)) return false
       seen.add(c.url)
       return true
     })
+    .slice(0, 4)
     .map((c: { url: string; title: string }) => ({ url: c.url, title: c.title }))
 
   return NextResponse.json({ answer, sources })
