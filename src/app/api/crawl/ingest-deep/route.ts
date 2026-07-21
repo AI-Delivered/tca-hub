@@ -41,13 +41,18 @@ function extractTcaUrls(text: string): string[] {
 }
 
 // Skip URLs that are navigation/shell pages unlikely to have useful content
+const IMAGE_EXTS = /\.(jpe?g|png|gif|webp|svg|ico|bmp|tiff?)(\?.*)?$/i
+const SKIP_PATTERNS = [
+  '/giving/', '/alumni', '/titan-club', '/tca-moments-blog',
+  '/explore-tca/tca-titan-of-the-year', '/sitemap', '/login',
+  '/logout', '/search', '?const_page=', 'javascript:',
+  '/uploaded/staff_photos', '/uploaded/Staff_Photos',
+  '/uploaded/images', '/uploaded/photos',
+]
+
 function isLikelyUseful(url: string): boolean {
-  const skip = [
-    '/giving/', '/alumni', '/titan-club', '/tca-moments-blog',
-    '/explore-tca/tca-titan-of-the-year', '/sitemap', '/login',
-    '/logout', '/search', '?const_page=', 'javascript:',
-  ]
-  return !skip.some(s => url.includes(s))
+  if (IMAGE_EXTS.test(url)) return false
+  return !SKIP_PATTERNS.some(s => url.includes(s))
 }
 
 export async function POST(req: NextRequest) {
