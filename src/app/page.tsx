@@ -295,12 +295,12 @@ export default function Home() {
               }}
             >
               {[
-                'Bell schedule',
-                'Report an absence',
-                'Dress code',
-                'School supply lists',
-                'Lunch information',
+                'When does school start?',
+                "What's the dress code?",
+                'How do I report an absence?',
+                'What time does school end?',
                 'Staff directory',
+                'School supply lists',
               ].map(s => (
                 <button
                   key={s}
