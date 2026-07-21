@@ -59,16 +59,21 @@ export async function POST(req: NextRequest) {
   const firecrawl = new FirecrawlApp({ apiKey: process.env.FIRECRAWL_API_KEY })
   const supabase = getSupabaseAdmin()
 
-  // 1. Get all URLs already indexed
-  const { data: existingRows } = await supabase
+  // 1. Get all URLs already indexed (just URLs, not full content)
+  const { data: urlRows } = await supabase
     .from('page_chunks')
-    .select('url, content')
+    .select('url')
 
-  const indexedUrls = new Set((existingRows ?? []).map(r => r.url))
+  const indexedUrls = new Set((urlRows ?? []).map(r => r.url))
 
-  // 2. Extract all TCA URLs referenced in existing content
+  // 2. Extract TCA URLs from a sample of content (avoid pulling all 1200+ chunks)
+  const { data: contentRows } = await supabase
+    .from('page_chunks')
+    .select('content')
+    .limit(300)
+
   const referencedUrls = new Set<string>()
-  for (const row of existingRows ?? []) {
+  for (const row of contentRows ?? []) {
     for (const url of extractTcaUrls(row.content)) {
       referencedUrls.add(url)
     }
@@ -113,7 +118,6 @@ export async function POST(req: NextRequest) {
       const result = await (firecrawl.scrapeUrl as any)(url, {
         formats: ['markdown'],
         parsePDF: true,
-        waitFor: 1500,
       })
 
       const content: string = result?.markdown ?? ''
