@@ -363,7 +363,10 @@ export default function Home() {
             <div className="tca-answer-card" style={{ padding: '20px 24px' }}>
               <div
                 className="tca-answer-body"
-                dangerouslySetInnerHTML={{ __html: marked.parse(result.answer) as string }}
+                dangerouslySetInnerHTML={{
+                  __html: (marked.parse(result.answer) as string)
+                    .replace(/(\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4})/g, '<a href="tel:$1">$1</a>')
+                }}
               />
             </div>
 
