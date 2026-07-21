@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 
+export const maxDuration = 300 // 5 min (requires Vercel Pro)
+
 function isAuthorized(req: NextRequest): boolean {
   if (req.headers.get('x-vercel-cron') === '1') return true
   return req.headers.get('authorization') === `Bearer ${process.env.CRAWL_SECRET}`
@@ -16,23 +18,16 @@ function chunkText(text: string, chunkSize = 1800, overlap = 200): string[] {
   return chunks
 }
 
-async function embedText(text: string): Promise<number[]> {
-  const { VoyageAIClient } = await import('voyageai')
-  const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })
-  const res = await voyage.embed({ input: [text.slice(0, 16000)], model: 'voyage-3-lite' })
-  return res.data![0].embedding!
-}
-
-// Fetches a completed Firecrawl job and indexes all pages into Supabase.
-// Call this ~5 minutes after POST /api/crawl with the returned jobId.
 export async function POST(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { jobId } = await req.json()
+  const { jobId, offset = 0, batchSize = 20 } = await req.json()
   if (!jobId) return NextResponse.json({ error: 'jobId required' }, { status: 400 })
 
   const { default: FirecrawlApp } = await import('@mendable/firecrawl-js')
+  const { VoyageAIClient } = await import('voyageai')
   const firecrawl = new FirecrawlApp({ apiKey: process.env.FIRECRAWL_API_KEY })
+  const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })
   const supabase = getSupabaseAdmin()
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -47,7 +42,8 @@ export async function POST(req: NextRequest) {
     }, { status: 202 })
   }
 
-  const pages = status.data ?? []
+  const allPages = status.data ?? []
+  const pages = allPages.slice(offset, offset + batchSize)
   let indexed = 0
   let errors = 0
 
@@ -58,18 +54,37 @@ export async function POST(req: NextRequest) {
 
     if (!content.trim() || !url) continue
 
-    await supabase.from('page_chunks').delete().eq('url', url)
+    const chunks = chunkText(content)
 
-    for (const chunk of chunkText(content)) {
-      try {
-        const embedding = await embedText(chunk)
-        await supabase.from('page_chunks').insert({ url, title, content: chunk, embedding })
-        indexed++
-      } catch {
-        errors++
+    // Batch embed all chunks for this page at once
+    try {
+      await supabase.from('page_chunks').delete().eq('url', url)
+
+      const inputs = chunks.map(c => c.slice(0, 16000))
+      const embeddingRes = await voyage.embed({ input: inputs, model: 'voyage-3-lite' })
+
+      for (let i = 0; i < chunks.length; i++) {
+        const embedding = embeddingRes.data?.[i]?.embedding
+        if (!embedding) continue
+        const { error } = await supabase.from('page_chunks').insert({ url, title, content: chunks[i], embedding })
+        if (error) errors++
+        else indexed++
       }
+    } catch {
+      errors++
     }
   }
 
-  return NextResponse.json({ indexed, errors, pages: pages.length, jobId })
+  const nextOffset = offset + batchSize
+  const hasMore = nextOffset < allPages.length
+
+  return NextResponse.json({
+    indexed,
+    errors,
+    processed: pages.length,
+    total: allPages.length,
+    offset,
+    nextOffset: hasMore ? nextOffset : null,
+    done: !hasMore,
+  })
 }
