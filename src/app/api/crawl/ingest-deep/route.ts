@@ -111,6 +111,7 @@ export async function POST(req: NextRequest) {
 
   let indexed = 0, skipped = 0, errors = 0
   const newUrls: string[] = []
+  const errorSamples: string[] = []
 
   for (const url of queue) {
     try {
@@ -149,8 +150,9 @@ export async function POST(req: NextRequest) {
       // Extract new URLs from this page's content and add to next run candidates
       // (they'll be picked up automatically next time this runs)
 
-    } catch {
+    } catch (e) {
       errors++
+      if (errorSamples.length < 3) errorSamples.push(`${url}: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
@@ -161,6 +163,8 @@ export async function POST(req: NextRequest) {
     errors,
     newPages: newUrls.length,
     sample: newUrls.slice(0, 10),
+    errorSamples,
+    queueSample: queue.slice(0, 5),
   })
 }
 
