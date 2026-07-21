@@ -410,6 +410,30 @@ export default function Home() {
           </div>
         )}
       </main>
+
+      <footer
+        style={{
+          position: 'relative',
+          zIndex: 1,
+          textAlign: 'center',
+          padding: '24px 20px 32px',
+          borderTop: '1px solid var(--border)',
+        }}
+      >
+        <p style={{ fontSize: '13px', color: 'var(--text-dim)', lineHeight: 1.6 }}>
+          Built with care by a TCA family &mdash; powered by{' '}
+          <a
+            href="https://ai-delivered.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: 'var(--navy)', textDecoration: 'none', fontWeight: 500 }}
+            onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--crimson)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--navy)' }}
+          >
+            AI Delivered
+          </a>
+        </p>
+      </footer>
     </>
   )
 }
