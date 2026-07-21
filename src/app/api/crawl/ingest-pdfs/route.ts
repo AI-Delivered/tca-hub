@@ -40,7 +40,12 @@ export async function POST(req: NextRequest) {
     matches.forEach((u: string) => urlSet.add(u))
   }
 
-  const urls = [...urlSet]
+  // Get already-indexed URLs to skip them
+  const { data: existingRows } = await supabase.from('page_chunks').select('url')
+  const indexed_urls = new Set((existingRows ?? []).map(r => r.url))
+
+  // Only process unindexed URLs, cap at 60 per run
+  const urls = [...urlSet].filter(u => !indexed_urls.has(u)).slice(0, 60)
   let indexed = 0, skipped = 0, errors = 0
 
   for (const url of urls) {
@@ -48,7 +53,6 @@ export async function POST(req: NextRequest) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result = await (firecrawl.scrapeUrl as any)(url, {
         formats: ['markdown'],
-        parsePDF: true,
       })
       const content = result?.markdown ?? ''
       const title = result?.metadata?.title ?? url
@@ -68,6 +72,7 @@ export async function POST(req: NextRequest) {
         const { error } = await supabase.from('page_chunks').insert({ url, title, content: chunks[i], embedding })
         if (error) errors++; else indexed++
       }
+      await new Promise(r => setTimeout(r, 2200))
     } catch {
       errors++
     }
