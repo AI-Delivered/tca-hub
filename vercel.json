@@ -3,6 +3,10 @@
     {
       "path": "/api/crawl",
       "schedule": "0 3 * * 0"
+    },
+    {
+      "path": "/api/crawl/ingest-pdfs",
+      "schedule": "0 5 * * 0"
     }
   ]
 }
