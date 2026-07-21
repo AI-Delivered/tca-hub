@@ -2,6 +2,9 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Image from 'next/image'
+import { marked } from 'marked'
+
+marked.setOptions({ breaks: true })
 
 const SUGGESTIONS = [
   'the bell schedule',
@@ -338,17 +341,30 @@ export default function Home() {
             ref={resultsRef}
             style={{ maxWidth: '640px', width: '100%', display: 'flex', flexDirection: 'column', gap: '16px' }}
           >
-            <div className="tca-answer-card" style={{ padding: '24px 28px' }}>
-              <p
-                style={{
-                  fontSize: '15px',
-                  lineHeight: '1.75',
-                  color: 'var(--text-primary)',
-                  whiteSpace: 'pre-wrap',
-                }}
-              >
-                {result.answer}
-              </p>
+            <button
+              onClick={reset}
+              style={{
+                alignSelf: 'flex-start',
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-dim)',
+                fontSize: '13px',
+                cursor: 'pointer',
+                padding: '0',
+                fontFamily: 'inherit',
+                transition: 'color 0.15s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.color = 'var(--navy)' }}
+              onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-dim)' }}
+            >
+              ← New search
+            </button>
+
+            <div className="tca-answer-card" style={{ padding: '20px 24px' }}>
+              <div
+                className="tca-answer-body"
+                dangerouslySetInnerHTML={{ __html: marked.parse(result.answer) as string }}
+              />
             </div>
 
             {result.sources.length > 0 && (
@@ -389,24 +405,6 @@ export default function Home() {
               </div>
             )}
 
-            <button
-              onClick={reset}
-              style={{
-                alignSelf: 'flex-start',
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-dim)',
-                fontSize: '13px',
-                cursor: 'pointer',
-                padding: '4px 0',
-                fontFamily: 'inherit',
-                transition: 'color 0.15s',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.color = 'var(--navy)' }}
-              onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-dim)' }}
-            >
-              ← New search
-            </button>
           </div>
         )}
       </main>

@@ -158,6 +158,23 @@ body {
   50%       { opacity: 0; }
 }
 
+/* Answer body — rendered markdown */
+.tca-answer-body {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text-primary);
+}
+.tca-answer-body p { margin: 0 0 10px; }
+.tca-answer-body p:last-child { margin-bottom: 0; }
+.tca-answer-body strong { font-weight: 600; }
+.tca-answer-body ul, .tca-answer-body ol { margin: 6px 0 10px 18px; padding: 0; }
+.tca-answer-body li { margin-bottom: 4px; }
+.tca-answer-body a { color: var(--navy); text-decoration: underline; word-break: break-word; }
+.tca-answer-body a:hover { color: var(--crimson); }
+.tca-answer-body h1, .tca-answer-body h2, .tca-answer-body h3 {
+  font-size: 15px; font-weight: 600; margin: 10px 0 4px;
+}
+
 /* Answer card */
 .tca-answer-card {
   background: var(--surface);

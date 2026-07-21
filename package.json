@@ -15,6 +15,7 @@
     "@supabase/ssr": "^0.12.3",
     "@supabase/supabase-js": "^2.110.7",
     "ai": "^7.0.31",
+    "marked": "^18.0.7",
     "next": "16.2.10",
     "openai": "^6.48.0",
     "react": "19.2.4",
