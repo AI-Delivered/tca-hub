@@ -398,7 +398,7 @@ export default function Home() {
                       className="tca-source-link"
                     >
                       <ArrowIcon />
-                      <span>{source.title || source.url}</span>
+                      <span>{source.title && !source.title.startsWith('http') ? source.title : new URL(source.url).hostname.replace('www.', '') + new URL(source.url).pathname.split('/').slice(0,3).join('/')}</span>
                     </a>
                   ))}
                 </div>
