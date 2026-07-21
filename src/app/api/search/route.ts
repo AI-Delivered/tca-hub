@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   // Find the most relevant chunks
   const { data: chunks, error } = await supabase.rpc('match_chunks', {
     query_embedding: queryEmbedding,
-    match_count: 6,
+    match_count: 12,
   })
 
   if (error) {
@@ -45,11 +45,12 @@ export async function POST(req: NextRequest) {
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-5',
-    max_tokens: 512,
+    max_tokens: 1024,
     system: `You are a helpful assistant for The Classical Academy (TCA) school in Colorado Springs.
-Answer questions using only the provided context from the TCA website.
-Be concise and direct. Always cite which source your answer comes from.
-If the context doesn't contain enough information, say so and suggest the user visit tcatitans.org.`,
+Answer questions using the provided context from the TCA website. Be specific and direct — give actual times, names, dates, and details from the context.
+When the context contains the answer, state it clearly and completely. Do not hedge or say you don't have information if the answer is present.
+If multiple schools have different schedules, list each one.
+Only suggest visiting tcatitans.org if the information is genuinely absent from the context.`,
     messages: [
       {
         role: 'user',
