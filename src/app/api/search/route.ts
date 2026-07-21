@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   // Find the most relevant chunks
   const { data: chunks, error } = await supabase.rpc('match_chunks', {
     query_embedding: queryEmbedding,
-    match_count: 12,
+    match_count: 16,
   })
 
   if (error) {
