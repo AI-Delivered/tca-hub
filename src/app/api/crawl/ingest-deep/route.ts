@@ -106,8 +106,8 @@ export async function POST(req: NextRequest) {
     if (!indexedUrls.has(url)) toScrape.push(url)
   }
 
-  // Dedupe
-  const queue = [...new Set(toScrape)].slice(0, 80) // cap at 80 per run
+  // Dedupe — cap at 30 per run to stay within Firecrawl rate limits
+  const queue = [...new Set(toScrape)].slice(0, 30)
 
   let indexed = 0, skipped = 0, errors = 0
   const newUrls: string[] = []
@@ -147,9 +147,8 @@ export async function POST(req: NextRequest) {
       }
       newUrls.push(url)
 
-      // Extract new URLs from this page's content and add to next run candidates
-      // (they'll be picked up automatically next time this runs)
-
+      // Respect Firecrawl rate limit (~30 req/min on hobby plan)
+      await new Promise(r => setTimeout(r, 2200))
     } catch (e) {
       errors++
       if (errorSamples.length < 3) errorSamples.push(`${url}: ${e instanceof Error ? e.message : String(e)}`)
