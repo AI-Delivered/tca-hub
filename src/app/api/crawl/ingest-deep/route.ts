@@ -116,9 +116,10 @@ export async function POST(req: NextRequest) {
   for (const url of queue) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const isPDF = url.includes('resource-manager/view') || url.endsWith('.pdf')
       const result = await (firecrawl.scrapeUrl as any)(url, {
         formats: ['markdown'],
-        parsePDF: true,
+        ...(isPDF ? { parsePDF: true } : {}),
       })
 
       const content: string = result?.markdown ?? ''
