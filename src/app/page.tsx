@@ -653,7 +653,7 @@ export default function Home() {
       setStreamingSources([])
       setQuery('')
 
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }), 80)
+      setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 80)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
