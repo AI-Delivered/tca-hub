@@ -2,6 +2,10 @@
   "crons": [
     { "path": "/api/crawl", "schedule": "0 3 * * 0" },
     { "path": "/api/crawl/ingest-deep", "schedule": "0 4 * * 0" },
-    { "path": "/api/crawl/ingest-pdfs", "schedule": "0 5 * * 0" }
+    { "path": "/api/crawl/ingest-pdfs", "schedule": "0 5 * * 0" },
+    { "path": "/api/crawl/ingest-ical", "schedule": "0 */6 * * *" },
+    { "path": "/api/crawl/ingest-rosters", "schedule": "0 6 * * *" },
+    { "path": "/api/crawl/ingest-stats", "schedule": "0 7 * * *" },
+    { "path": "/api/crawl/ingest-calendar", "schedule": "0 */4 * * *" }
   ]
 }

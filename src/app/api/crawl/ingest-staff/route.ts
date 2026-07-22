@@ -3,146 +3,121 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 
 export const maxDuration = 300
 
+const CAMPUSES = [
+  { name: 'East Elementary', url: 'https://www.tcatitans.org/schools/east-elementary/east-elementary-staff-directory' },
+  { name: 'Central Elementary', url: 'https://www.tcatitans.org/schools/central-elementary/central-elementary-staff-directory' },
+  { name: 'North Elementary', url: 'https://www.tcatitans.org/schools/north-elementary/north-elementary-staff-directory' },
+  { name: 'Junior High', url: 'https://www.tcatitans.org/schools/junior-high/junior-high-staff-directory' },
+  { name: 'High School', url: 'https://www.tcatitans.org/schools/high-school/high-school-staff-directory' },
+  { name: 'College Pathways', url: 'https://www.tcatitans.org/schools/college-pathways/college-pathways-staff-directory' },
+  { name: 'Cottage School', url: 'https://www.tcatitans.org/schools/cottage-school/csp-staff-directory' },
+]
+
 function isAuthorized(req: NextRequest): boolean {
-  if (req.headers.get('x-vercel-cron') === '1') return true
+  const secret = req.nextUrl.searchParams.get('secret')
+  if (secret === process.env.CRAWL_SECRET) return true
   return req.headers.get('authorization') === `Bearer ${process.env.CRAWL_SECRET}`
 }
 
-function chunkText(text: string, chunkSize = 1800, overlap = 200): string[] {
-  const chunks: string[] = []
-  let start = 0
-  while (start < text.length) {
-    chunks.push(text.slice(start, start + chunkSize))
-    start += chunkSize - overlap
+interface StaffMember { name: string; role: string }
+
+// Works for both campus-specific (name, role, photo) and global (name, role, campus, photo)
+function extractStaff(md: string): StaffMember[] {
+  const members: StaffMember[] = []
+  for (const m of md.matchAll(/###\s+\[([^\]]+)\]\([^)]+\)\n\n([^\n![\]]+)/g)) {
+    const name = m[1].trim()
+    const role = m[2].trim()
+    if (name && role && !role.startsWith('http') && role.length < 80) {
+      members.push({ name, role })
+    }
   }
-  return chunks
+  return members
 }
 
-const STAFF_DIRECTORY_URL = 'https://www.tcatitans.org/about/staff-directory'
-
-export async function POST(req: NextRequest) {
-  if (!isAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const { VoyageAIClient } = await import('voyageai')
-  const { default: FirecrawlApp } = await import('@mendable/firecrawl-js')
-  const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })
-  const firecrawl = new FirecrawlApp({ apiKey: process.env.FIRECRAWL_API_KEY })
-  const supabase = getSupabaseAdmin()
-
-  // Scrape the staff directory page with JS actions to load all staff cards
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const result = await (firecrawl.scrapeUrl as any)(STAFF_DIRECTORY_URL, {
-    formats: ['markdown', 'html'],
-    actions: [
-      { type: 'wait', milliseconds: 2000 },
-      // Click every staff card to reveal contact modals, then wait for content
-      { type: 'click', selector: '.fsl-staff-card' },
-      { type: 'wait', milliseconds: 1000 },
-    ],
-    waitFor: 3000,
-  })
-
-  const rawMarkdown: string = result?.markdown ?? ''
-  const rawHtml: string = result?.html ?? ''
-
-  // Extract staff info from HTML: look for email links and names near them
-  const staffEntries: string[] = []
-
-  // Parse email links from the HTML
-  const emailMatches = rawHtml.matchAll(/href="mailto:([^"]+)"[^>]*>([^<]*)<\/a>/gi)
-  const nameEmailMap = new Map<string, string>()
-  for (const match of emailMatches) {
-    const email = match[1].trim()
-    const linkText = match[2].trim()
-    if (email.endsWith('@tcatitans.org') && linkText) {
-      nameEmailMap.set(linkText, email)
-    }
-  }
-
-  // Also pull name+email pairs from the HTML with broader patterns
-  const staffCardMatches = rawHtml.matchAll(
-    /<(?:h[1-6]|strong|b)[^>]*>([^<]{3,60})<\/(?:h[1-6]|strong|b)>[^]*?href="mailto:([^"@]+@tcatitans\.org)"/gi
-  )
-  for (const match of staffCardMatches) {
-    nameEmailMap.set(match[1].trim(), match[2].trim())
-  }
-
-  if (nameEmailMap.size > 0) {
-    const lines = ['# TCA Staff Directory', '']
-    for (const [name, email] of nameEmailMap) {
-      lines.push(`- **${name}**: ${email}`)
-      staffEntries.push(`${name}: ${email}`)
-    }
-    const staffContent = lines.join('\n')
-
-    // Delete old staff directory chunks and re-index
-    await supabase.from('page_chunks').delete().eq('url', STAFF_DIRECTORY_URL)
-
-    const chunks = chunkText(staffContent)
-    const embeddingRes = await voyage.embed({
-      input: chunks.map(c => c.slice(0, 16000)),
-      model: 'voyage-3-lite',
-    })
-
-    let indexed = 0
-    for (let i = 0; i < chunks.length; i++) {
-      const embedding = embeddingRes.data?.[i]?.embedding
-      if (!embedding) continue
-      const { error } = await supabase.from('page_chunks').insert({
-        url: STAFF_DIRECTORY_URL,
-        title: 'TCA Staff Directory',
-        content: chunks[i],
-        embedding,
-      })
-      if (!error) indexed++
-    }
-
-    return NextResponse.json({
-      success: true,
-      staffFound: nameEmailMap.size,
-      indexed,
-      sample: staffEntries.slice(0, 5),
-    })
-  }
-
-  // Fallback: index whatever markdown we got, even if we didn't parse emails
-  if (rawMarkdown.length > 100) {
-    await supabase.from('page_chunks').delete().eq('url', STAFF_DIRECTORY_URL)
-    const chunks = chunkText(rawMarkdown)
-    const embeddingRes = await voyage.embed({
-      input: chunks.map(c => c.slice(0, 16000)),
-      model: 'voyage-3-lite',
-    })
-    let indexed = 0
-    for (let i = 0; i < chunks.length; i++) {
-      const embedding = embeddingRes.data?.[i]?.embedding
-      if (!embedding) continue
-      const { error } = await supabase.from('page_chunks').insert({
-        url: STAFF_DIRECTORY_URL,
-        title: 'TCA Staff Directory',
-        content: chunks[i],
-        embedding,
-      })
-      if (!error) indexed++
-    }
-    return NextResponse.json({
-      success: true,
-      staffFound: 0,
-      indexed,
-      note: 'No structured emails found — indexed raw markdown as fallback',
-      preview: rawMarkdown.slice(0, 500),
-    })
-  }
-
-  return NextResponse.json({
-    success: false,
-    note: 'Staff directory returned no usable content',
-    htmlLength: rawHtml.length,
-    markdownLength: rawMarkdown.length,
-  })
+function getTotalPages(md: string): number {
+  const m = md.match(/showing\s+\d+\s*-\s*\d+\s+of\s+(\d+)\s+constituents/i)
+  if (!m) return 1
+  return Math.ceil(parseInt(m[1]) / 12)
 }
 
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  return POST(req)
+
+  // Allow targeting a single campus to avoid timeouts
+  const campusFilter = req.nextUrl.searchParams.get('campus')
+  const targets = campusFilter
+    ? CAMPUSES.filter(c => c.name.toLowerCase().includes(campusFilter.toLowerCase()))
+    : CAMPUSES
+
+  const { VoyageAIClient } = await import('voyageai')
+  const { default: FirecrawlApp } = await import('@mendable/firecrawl-js')
+  const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const firecrawl = new FirecrawlApp({ apiKey: process.env.FIRECRAWL_API_KEY }) as any
+  const supabase = getSupabaseAdmin()
+  const now = new Date().toISOString()
+  const results = []
+
+  for (const campus of targets) {
+    const allStaff: StaffMember[] = []
+    const seen = new Set<string>()
+
+    const addStaff = (members: StaffMember[]) => {
+      for (const m of members) {
+        if (!seen.has(m.name)) { seen.add(m.name); allStaff.push(m) }
+      }
+    }
+
+    // Page 1: normal scrape
+    const first = await firecrawl.scrapeUrl(campus.url, { formats: ['markdown'], waitFor: 3000 })
+    const firstMd: string = first?.markdown ?? ''
+    const totalPages = getTotalPages(firstMd)
+    addStaff(extractStaff(firstMd))
+
+    // Pages 2+: click the pagination link from the base URL
+    for (let page = 2; page <= totalPages; page++) {
+      try {
+        const r = await firecrawl.scrapeUrl(campus.url, {
+          formats: ['markdown'],
+          actions: [
+            { type: 'wait', milliseconds: 2000 },
+            { type: 'click', selector: `a[href*="const_page=${page}"]` },
+            { type: 'wait', milliseconds: 2000 },
+          ],
+          waitFor: 5000,
+        })
+        addStaff(extractStaff(r?.markdown ?? ''))
+      } catch {
+        // skip failed pages
+      }
+    }
+
+    // Group by role
+    const byRole: Record<string, string[]> = {}
+    for (const s of allStaff) {
+      if (!byRole[s.role]) byRole[s.role] = []
+      byRole[s.role].push(s.name)
+    }
+
+    const lines = [`${campus.name} Staff Directory (${allStaff.length} staff members):`]
+    for (const [role, names] of Object.entries(byRole).sort()) {
+      lines.push(`  ${role}: ${names.join(', ')}`)
+    }
+    const content = lines.join('\n')
+
+    // Replace existing chunk for this campus
+    await supabase.from('page_chunks').delete().eq('url', campus.url)
+    const embRes = await voyage.embed({ input: [content.slice(0, 16000)], model: 'voyage-3-lite' })
+    const { error } = await supabase.from('page_chunks').insert({
+      url: campus.url,
+      title: `${campus.name} Staff Directory`,
+      content,
+      embedding: embRes.data![0].embedding!,
+      crawled_at: now,
+    })
+
+    results.push({ campus: campus.name, staff: allStaff.length, pages: totalPages, error: error?.message })
+  }
+
+  return NextResponse.json({ results })
 }

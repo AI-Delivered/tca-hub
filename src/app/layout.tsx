@@ -12,9 +12,24 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+}
+
 export const metadata: Metadata = {
   title: "TCA Hub — Ask Anything",
   description: "AI-powered search for The Classical Academy",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    title: "TCA Hub",
+    statusBarStyle: "default",
+  },
+  icons: {
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export default function RootLayout({

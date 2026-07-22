@@ -40,12 +40,19 @@ export async function POST(req: NextRequest) {
     matches.forEach((u: string) => urlSet.add(u))
   }
 
-  // Get already-indexed URLs to skip them
-  const { data: existingRows } = await supabase.from('page_chunks').select('url')
-  const indexed_urls = new Set((existingRows ?? []).map(r => r.url))
+  // Get already-indexed URLs to skip them (fetch all pages)
+  const indexed_urls = new Set<string>()
+  let page = 0
+  while (true) {
+    const { data: batch } = await supabase.from('page_chunks').select('url').range(page * 1000, (page + 1) * 1000 - 1)
+    if (!batch?.length) break
+    batch.forEach(r => indexed_urls.add(r.url))
+    if (batch.length < 1000) break
+    page++
+  }
 
-  // Only process unindexed URLs, cap at 60 per run
-  const urls = [...urlSet].filter(u => !indexed_urls.has(u)).slice(0, 60)
+  // Only process unindexed URLs, cap at 30 per run
+  const urls = [...urlSet].filter(u => !indexed_urls.has(u)).slice(0, 30)
   let indexed = 0, skipped = 0, errors = 0
 
   for (const url of urls) {
@@ -72,7 +79,7 @@ export async function POST(req: NextRequest) {
         const { error } = await supabase.from('page_chunks').insert({ url, title, content: chunks[i], embedding })
         if (error) errors++; else indexed++
       }
-      await new Promise(r => setTimeout(r, 2200))
+      await new Promise(r => setTimeout(r, 200))
     } catch {
       errors++
     }

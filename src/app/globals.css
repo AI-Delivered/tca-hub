@@ -26,7 +26,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+html, body { height: 100%; background-color: var(--bg); }
 
 body {
   background: var(--bg);
@@ -158,53 +158,129 @@ body {
   50%       { opacity: 0; }
 }
 
-/* Answer body — rendered markdown */
-.tca-answer-body {
-  font-size: 15px;
-  line-height: 1.65;
-  color: var(--text-primary);
-}
-.tca-answer-body p { margin: 0 0 10px; }
-.tca-answer-body p:last-child { margin-bottom: 0; }
-.tca-answer-body strong { font-weight: 600; }
-.tca-answer-body ul, .tca-answer-body ol { margin: 6px 0 10px 18px; padding: 0; }
-.tca-answer-body li { margin-bottom: 4px; }
-.tca-answer-body a { color: var(--navy); text-decoration: underline; word-break: break-word; }
-.tca-answer-body a:hover { color: var(--crimson); }
-.tca-answer-body h1, .tca-answer-body h2, .tca-answer-body h3 {
-  font-size: 15px; font-weight: 600; margin: 10px 0 4px;
-}
-
-/* Answer card */
+/* Answer card — dark panel */
 .tca-answer-card {
-  background: var(--surface);
-  border: 1.5px solid var(--border);
-  border-radius: 20px;
-  box-shadow: 0 2px 12px rgba(26, 45, 90, 0.06);
-  animation: fade-up 0.3s ease both;
+  background: #0e1520;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.18), 0 1px 0 rgba(255,255,255,0.04);
+  animation: fade-up 0.25s ease both;
 }
 
 @keyframes fade-up {
-  from { opacity: 0; transform: translateY(10px); }
+  from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Source links */
-.tca-source-link {
-  color: var(--navy);
-  text-decoration: none;
-  font-size: 13px;
+/* Answer meta label */
+.tca-answer-meta {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-  transition: color 0.15s;
+  gap: 8px;
+  padding: 16px 22px 0;
+}
+
+.tca-answer-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--crimson);
+  box-shadow: 0 0 8px rgba(185,28,58,0.55);
+  flex-shrink: 0;
+}
+
+.tca-answer-label {
+  font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.28);
+}
+
+/* Answer body — rendered markdown */
+.tca-answer-body {
+  font-size: 15.5px;
+  line-height: 1.74;
+  color: #eaf0ff;
+  padding: 12px 22px 20px;
+  letter-spacing: -0.01em;
+}
+.tca-answer-body p { margin: 0 0 10px; }
+.tca-answer-body p:last-child { margin-bottom: 0; }
+.tca-answer-body strong { font-weight: 600; color: #ffffff; }
+.tca-answer-body ul, .tca-answer-body ol { margin: 6px 0 10px 18px; padding: 0; }
+.tca-answer-body li { margin-bottom: 4px; }
+.tca-answer-body a { color: #89b4f7; text-decoration: underline; word-break: break-word; }
+.tca-answer-body a:hover { color: #fff; }
+.tca-answer-body h1, .tca-answer-body h2, .tca-answer-body h3 {
+  font-size: 15.5px; font-weight: 600; color: #fff; margin: 10px 0 4px;
+}
+
+/* Source links — inside dark card */
+.tca-sources-panel {
+  border-top: 1px solid rgba(255,255,255,0.06);
+  background: #0a1018;
+}
+
+.tca-source-link {
+  color: rgba(255,255,255,0.38);
+  text-decoration: none;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 22px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  transition: color 0.15s, background 0.15s;
+  letter-spacing: -0.01em;
 }
 
 .tca-source-link:last-child { border-bottom: none; }
 
-.tca-source-link:hover { color: var(--crimson); }
+.tca-source-link:hover {
+  color: rgba(255,255,255,0.75);
+  background: rgba(255,255,255,0.03);
+}
+
+/* Follow-up chips — shown when AI asks a clarifying question */
+.tca-followup-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 14px 22px 16px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+.tca-followup-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05);
+  color: #c8d8f8;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  letter-spacing: -0.01em;
+}
+
+.tca-followup-chip:hover {
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(255,255,255,0.22);
+  color: #fff;
+}
+
+.tca-source-num {
+  font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 9px;
+  color: var(--crimson);
+  opacity: 0.5;
+  min-width: 14px;
+  flex-shrink: 0;
+}
 
 /* Suggestion chips */
 .tca-chip {
@@ -253,6 +329,90 @@ body {
   margin: 4px auto 0;
 }
 
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tca-orb, .tca-cycle-cursor, .tca-dots span { animation: none; }
+}
+
+@media (max-width: 640px) {
+  .tca-cta-pill { display: none !important; }
+  .tca-cta-mobile { display: inline; }
+}
+
+@media (min-width: 641px) {
+  .tca-cta-mobile { display: none; }
+}
+
+.tca-cta-mobile {
+  font-size: 12px;
+  color: var(--crimson);
+  text-decoration: none;
+  letter-spacing: 0.02em;
+}
+
+.tca-cta-mobile:hover {
+  text-decoration: underline;
+}
+
+/* Footer CTA pill */
+.tca-cta-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 10px 20px;
+  border-radius: 100px;
+  border: 1.5px solid var(--border);
+  text-decoration: none;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  max-width: calc(100vw - 64px);
+  line-height: 1.4;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.25s, color 0.25s, transform 0.2s, box-shadow 0.25s;
+}
+
+.tca-cta-pill::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--crimson);
+  border-radius: inherit;
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 0;
+}
+
+.tca-cta-pill:hover::before {
+  transform: scaleX(1);
+}
+
+.tca-cta-pill:hover {
+  border-color: var(--crimson);
+  color: #fff;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(185, 28, 58, 0.28);
+}
+
+.tca-cta-text,
+.tca-cta-url {
+  position: relative;
+  z-index: 1;
+}
+
+.tca-cta-url {
+  color: var(--crimson);
+  transition: color 0.25s;
+}
+
+.tca-cta-pill:hover .tca-cta-url {
+  color: rgba(255, 255, 255, 0.85);
 }

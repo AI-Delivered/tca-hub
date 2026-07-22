@@ -33,7 +33,7 @@ function isBlank(answer: string): boolean {
     lower.includes("not available") ||
     lower.includes("no information") ||
     lower.includes("not in the context") ||
-    answer.trim().length < 40
+    answer.trim().length < 20
   )
 }
 

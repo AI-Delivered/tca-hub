@@ -1,0 +1,17 @@
+{
+  "name": "TCA Hub",
+  "short_name": "TCA Hub",
+  "description": "AI-powered search for The Classical Academy",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f0f0f5",
+  "theme_color": "#f0f0f5",
+  "icons": [
+    {
+      "src": "/tca-logo.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
