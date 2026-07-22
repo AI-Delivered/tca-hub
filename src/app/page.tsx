@@ -764,11 +764,7 @@ export default function Home() {
               onChange={e => setQuery(e.target.value)}
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
-              placeholder={
-                hasConversation
-                  ? 'Ask a follow-up…'
-                  : (isFocused || query ? 'Ask anything about TCA…' : '')
-              }
+              placeholder={hasConversation ? 'Ask a follow-up…' : 'Ask anything about TCA…'}
               className="tca-search-input"
               autoComplete="off"
               spellCheck={false}
