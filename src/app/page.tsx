@@ -6,6 +6,11 @@ import { marked } from 'marked'
 
 marked.setOptions({ breaks: true })
 
+const renderer = new marked.Renderer()
+renderer.link = ({ href, title, text }: { href: string; title?: string | null; text: string }) =>
+  `<a href="${href}" target="_blank" rel="noopener noreferrer"${title ? ` title="${title}"` : ''}>${text}</a>`
+marked.use({ renderer })
+
 const SUGGESTIONS = [
   'football schedules',
   'my spelling words',
