@@ -178,9 +178,10 @@ export async function POST(req: NextRequest) {
     // Always anchor sports queries with the GoBound upcoming chunk — it's the authoritative
     // aggregated view of all TCA athletics for the next 30 days with exact times.
     // Give it the highest priority so it wins over TeamReach or sport-specific chunks.
+    // Fetch both GoBound upcoming chunks by exact title — avoids # encoding issues in ILIKE
     const [{ data: gbUpcoming }, { data: gbSchedule }] = await Promise.all([
-      supabase.from('page_chunks').select('url, title, content').ilike('url', '%gobound%#upcoming%').limit(1),
-      supabase.from('page_chunks').select('url, title, content').ilike('url', '%gobound%calendar?v=list%').ilike('title', '%Upcoming%').limit(1),
+      supabase.from('page_chunks').select('url, title, content').eq('title', 'TCA Athletics — Upcoming').limit(1),
+      supabase.from('page_chunks').select('url, title, content').eq('title', 'TCA Athletics & Activities — Upcoming Schedule').limit(1),
     ])
     const gbChunks = [...(gbUpcoming ?? []), ...(gbSchedule ?? [])].map(c => ({ ...c, similarity: 0.90 }))
     keywordChunks = [...gbChunks, ...keywordChunks]
