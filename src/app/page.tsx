@@ -852,9 +852,52 @@ export default function Home() {
                 tca<span style={{ fontWeight: 600, color: 'var(--crimson)' }}>hub</span>
               </h1>
               {!hasConversation && (
-                <p style={{ fontSize: 'clamp(15px, 3.6vw, 22px)', fontWeight: 300, color: 'var(--text-dim)', whiteSpace: 'nowrap', overflow: 'hidden', maxWidth: '100%', paddingRight: '24px' }}>
-                  Ask about <CyclingText />
-                </p>
+                <>
+                  <p style={{ fontSize: 'clamp(15px, 3.6vw, 22px)', fontWeight: 300, color: 'var(--text-dim)', whiteSpace: 'nowrap', overflow: 'hidden', maxWidth: '100%', paddingRight: '24px' }}>
+                    Ask about <CyclingText />
+                  </p>
+                  <p style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '8px', letterSpacing: '0.04em' }}>
+                    Built with love by{' '}
+                    <span
+                      style={{ position: 'relative', display: 'inline-block' }}
+                      onMouseEnter={e => {
+                        const tip = (e.currentTarget as HTMLElement).querySelector<HTMLElement>('.ai-tooltip')
+                        if (tip) tip.style.opacity = '1'
+                      }}
+                      onMouseLeave={e => {
+                        const tip = (e.currentTarget as HTMLElement).querySelector<HTMLElement>('.ai-tooltip')
+                        if (tip) tip.style.opacity = '0'
+                      }}
+                    >
+                      <span style={{ borderBottom: '1px dotted var(--text-dim)', cursor: 'default', paddingBottom: '1px' }}>a TCA family</span>
+                      <span
+                        className="ai-tooltip"
+                        style={{
+                          position: 'absolute', bottom: 'calc(100% + 8px)', left: '50%', transform: 'translateX(-50%)',
+                          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '10px',
+                          padding: '10px 14px', width: '200px', textAlign: 'center',
+                          opacity: 0, transition: 'opacity 0.15s', pointerEvents: 'none',
+                          boxShadow: '0 4px 16px rgba(0,0,0,0.08)', zIndex: 10,
+                        }}
+                      >
+                        <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-primary)', fontWeight: 500, marginBottom: '4px', letterSpacing: 0 }}>
+                          Designed with real family needs in mind.
+                        </span>
+                        <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '8px', letterSpacing: 0 }}>
+                          Want something like this for your organization?
+                        </span>
+                        <a
+                          href="https://ai-delivered.com/local"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ display: 'inline-block', background: 'var(--crimson)', borderRadius: '20px', padding: '5px 12px', color: 'white', fontSize: '11px', textDecoration: 'none', fontWeight: 500, pointerEvents: 'auto' }}
+                        >
+                          ai-delivered →
+                        </a>
+                      </span>
+                    </span>
+                  </p>
+                </>
               )}
             </div>
           </div>
@@ -905,33 +948,6 @@ export default function Home() {
                   style={{ display: 'inline-flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '20px', padding: '7px 14px', color: 'var(--text-dim)', fontSize: '13px', textDecoration: 'none', transition: 'all 0.15s' }}
                 >
                   Staff Directory
-                </a>
-              </div>
-              {/* Placeholder for disclaimer / additional copy */}
-
-              {/* Built with love — shown below chips on home screen */}
-              <div style={{ marginTop: '16px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '12px', padding: '22px 20px', textAlign: 'center' }}>
-                <p style={{ fontSize: '13px', color: 'var(--text-dim)', marginBottom: '12px', letterSpacing: '0.12em', textTransform: 'uppercase', fontWeight: 500 }}>
-                  Built with love by a TCA family
-                </p>
-                <p style={{ fontSize: '13px', color: 'rgba(15,26,53,0.5)', marginBottom: '4px', lineHeight: 1.6 }}>
-                  Designed with real family needs in mind to simplify everyday school life.
-                </p>
-                <p style={{ fontSize: '13px', color: 'rgba(15,26,53,0.5)', marginBottom: '14px', lineHeight: 1.5 }}>
-                  Want something like this for your organization?
-                </p>
-                <p style={{ fontSize: 'clamp(15px, 3.5vw, 18px)', fontWeight: 500, color: 'var(--text-primary)', lineHeight: 1.2, marginBottom: '16px' }}>
-                  We can build it for you too.
-                </p>
-                <a
-                  href="https://ai-delivered.com/local"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'var(--crimson)', borderRadius: '20px', padding: '8px 20px', color: 'white', fontSize: '13px', textDecoration: 'none', fontWeight: 500, transition: 'opacity 0.15s' }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.opacity = '0.85' }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.opacity = '1' }}
-                >
-                  ai-delivered →
                 </a>
               </div>
             </>
