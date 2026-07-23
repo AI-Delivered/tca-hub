@@ -1028,6 +1028,9 @@ export default function Home() {
             Personalize for your student →
           </button>
         )}
+        <p style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '8px', opacity: 0.6 }}>
+          The Classical Academy · Colorado Springs, Colorado
+        </p>
       </footer>
     </div>
   )
