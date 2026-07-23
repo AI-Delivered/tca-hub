@@ -932,7 +932,7 @@ export default function Home() {
                   We can build it.
                 </p>
                 <a
-                  href="https://ai-delivered.com"
+                  href="https://ai-delivered.com/local"
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ display: 'inline-flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '20px', padding: '7px 16px', color: 'var(--text-dim)', fontSize: '12px', textDecoration: 'none', fontWeight: 500, transition: 'all 0.15s' }}
