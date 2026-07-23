@@ -915,22 +915,23 @@ export default function Home() {
                   Staff Directory
                 </a>
               </div>
-              {userCtx && (userCtx.campuses.length > 0 || userCtx.grades.length > 0) ? (
-                <button
-                  onClick={() => setShowOnboarding(true)}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: '12px', fontFamily: 'inherit', padding: '0', marginTop: '2px' }}
-                >
-                  <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M5 6.5l1.5 1.5L9 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                  Personalized for your family · Edit
-                </button>
-              ) : (
-                <button
-                  onClick={() => setShowOnboarding(true)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: '12px', fontFamily: 'inherit', padding: '0', marginTop: '2px', textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: '3px' }}
-                >
-                  Personalize for your student →
-                </button>
-              )}
+              {/* Placeholder for disclaimer / additional copy */}
+
+              {/* Built with love — shown below chips on home screen */}
+              <div style={{ textAlign: 'center', marginTop: '16px' }}>
+                <p style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '6px', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                  Built with love by a TCA family
+                </p>
+                <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '2px', lineHeight: 1.6 }}>
+                  Designed with real family needs in mind to simplify everyday school life. Want something like this for your organization?
+                </p>
+                <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '10px', lineHeight: 1.5 }}>
+                  We can build it.
+                </p>
+                <a href="https://ai-delivered.com" target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '20px', padding: '7px 16px', color: 'var(--text-dim)', fontSize: '12px', textDecoration: 'none', fontWeight: 500, transition: 'all 0.15s' }}>
+                  ai-delivered.com →
+                </a>
+              </div>
             </>
           )}
         </div>
@@ -1003,24 +1004,28 @@ export default function Home() {
           position: 'relative',
           zIndex: 1,
           textAlign: 'center',
-          padding: '24px 20px max(32px, env(safe-area-inset-bottom, 32px))',
+          padding: '16px 20px max(24px, env(safe-area-inset-bottom, 24px))',
           borderTop: '1px solid var(--border)',
           marginTop: '40px',
           flexShrink: 0,
         }}
       >
-        <p style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '8px', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-          Built with love by a TCA family
-        </p>
-        <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '2px', lineHeight: 1.6 }}>
-          Designed with real family needs in mind to simplify everyday school life. Want something like this for your organization?
-        </p>
-        <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '10px', lineHeight: 1.5 }}>
-          We can build it.
-        </p>
-        <a href="https://ai-delivered.com" target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '20px', padding: '7px 16px', color: 'var(--text-dim)', fontSize: '12px', textDecoration: 'none', fontWeight: 500, transition: 'all 0.15s' }}>
-          ai-delivered.com →
-        </a>
+        {userCtx && (userCtx.campuses.length > 0 || userCtx.grades.length > 0) ? (
+          <button
+            onClick={() => setShowOnboarding(true)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: '12px', fontFamily: 'inherit', padding: '0' }}
+          >
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M5 6.5l1.5 1.5L9 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            Personalized for your family · Edit
+          </button>
+        ) : (
+          <button
+            onClick={() => setShowOnboarding(true)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: '12px', fontFamily: 'inherit', padding: '0', textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: '3px' }}
+          >
+            Personalize for your student →
+          </button>
+        )}
       </footer>
     </div>
   )
