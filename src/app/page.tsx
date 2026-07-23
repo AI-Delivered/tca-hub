@@ -830,7 +830,7 @@ export default function Home() {
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: hasConversation ? 'flex-start' : 'center',
-          padding: hasConversation ? '60px 20px 60px' : '0 20px',
+          padding: hasConversation ? '60px 20px 60px' : `max(env(safe-area-inset-top, 0px), 0px) 20px 0`,
           transition: 'justify-content 0.3s',
         }}
       >
