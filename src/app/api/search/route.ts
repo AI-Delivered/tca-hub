@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
 
   // Broad "days off" queries — pull monthly calendar chunks for the current school year.
   // Only include months from the current month onward so the AI isn't confused by past events.
-  const daysOffQuery = /days off|day off|school calendar|no.school days|holidays|days? (out|closed)|when.*(off|closed|break)|schedule for the year/i.test(query)
+  const daysOffQuery = /days off|day off|school calendar|no.school days|holidays|days? (out|closed)|when.*(off|closed|break)|schedule for the year|teacher work|workday|inservice|professional development|pd day|halloween|thanksgiving|christmas|winter break|spring break|fall break|no school/i.test(query)
   if (daysOffQuery) {
     const campusMap: Record<string, string> = {
       'east': 'east-elementary-calendar',
