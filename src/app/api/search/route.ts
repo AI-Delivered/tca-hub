@@ -124,15 +124,13 @@ export async function POST(req: NextRequest) {
     }
     const campusKey = Object.keys(campusMap).find(k => query.toLowerCase().includes(k))
     const urlFilter = campusKey ? `%${campusMap[campusKey]}%` : '%-calendar%'
-    // Pull all monthly chunks (URL has a #month-year fragment) — no content filter so no months get cut off
-    const { data: daysOffRows } = await supabase
-      .from('page_chunks')
-      .select('url, title, content')
-      .ilike('url', urlFilter)
-      .ilike('url', '%#%')
-      .not('url', 'ilike', '%#upcoming%')
-      .limit(80)
-    const daysOffChunks = (daysOffRows ?? []).map(c => ({ ...c, similarity: 0.68 }))
+    // Pull all monthly chunks — pattern: ...calendar#month-202X (never matches #upcoming)
+    // Run two queries (2026 + 2027) and merge to ensure full year coverage
+    const [{ data: rows2026 }, { data: rows2027 }] = await Promise.all([
+      supabase.from('page_chunks').select('url, title, content').ilike('url', urlFilter).ilike('url', '%-2026').limit(50),
+      supabase.from('page_chunks').select('url, title, content').ilike('url', urlFilter).ilike('url', '%-2027').limit(50),
+    ])
+    const daysOffChunks = [...(rows2026 ?? []), ...(rows2027 ?? [])].map(c => ({ ...c, similarity: 0.68 }))
     keywordChunks = [...keywordChunks, ...daysOffChunks]
   }
 
