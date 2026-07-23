@@ -651,24 +651,12 @@ export default function Home() {
   const [error, setError] = useState('')
   const [isFocused, setIsFocused] = useState(false)
   const [chips, setChips] = useState<string[]>(DEFAULT_CHIPS)
-  const [userCtx, setUserCtx] = useState<TcaUserContext | null>(null)
-  const [showOnboarding, setShowOnboarding] = useState(false)
   const [showCalendars, setShowCalendars] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const hasConversation = exchanges.length > 0 || loading || streamingAnswer !== ''
-  const displayChips = buildPersonalizedChips(userCtx, chips)
-
-  useEffect(() => {
-    const ctx = loadContext()
-    if (ctx) {
-      setUserCtx(ctx)
-    } else {
-      const t = setTimeout(() => setShowOnboarding(true), 8000)
-      return () => clearTimeout(t)
-    }
-  }, [])
+  const displayChips = buildPersonalizedChips(null, chips)
 
   useEffect(() => {
     const STALE_MS = 30 * 60 * 1000
@@ -692,27 +680,12 @@ export default function Home() {
       .catch(() => {})
   }, [])
 
-  function handleSaveContext(ctx: TcaUserContext) {
-    saveContext(ctx)
-    setUserCtx(ctx)
-    setShowOnboarding(false)
-  }
-
-  function handleSkipOnboarding() {
-    const ctx: TcaUserContext = { campuses: [], grades: [], onboarded: true }
-    saveContext(ctx)
-    setUserCtx(ctx)
-    setShowOnboarding(false)
-  }
-
   async function handleSearch(e: React.FormEvent, overrideQuery?: string) {
     e.preventDefault()
     const rawQ = (overrideQuery ?? query).trim()
     if (!rawQ || loading) return
 
-    const ctx = userCtx ?? loadContext()
-    const prefix = ctx ? buildContextPrefix(ctx) : ''
-    const q = prefix + rawQ
+    const q = rawQ
 
     if (overrideQuery) setQuery(overrideQuery)
 
@@ -1012,7 +985,6 @@ export default function Home() {
         )}
       </main>
 
-      {showOnboarding && <OnboardingModal onSave={handleSaveContext} onSkip={handleSkipOnboarding} />}
       {showCalendars && <CalendarPanel onClose={() => setShowCalendars(false)} />}
       <PullToRefresh />
       <AddToHomePrompt />
@@ -1028,22 +1000,6 @@ export default function Home() {
           flexShrink: 0,
         }}
       >
-        {userCtx && (userCtx.campuses.length > 0 || userCtx.grades.length > 0) ? (
-          <button
-            onClick={() => setShowOnboarding(true)}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: '12px', fontFamily: 'inherit', padding: '0' }}
-          >
-            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.3"/><path d="M5 6.5l1.5 1.5L9 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            Personalized for your family · Edit
-          </button>
-        ) : (
-          <button
-            onClick={() => setShowOnboarding(true)}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: '12px', fontFamily: 'inherit', padding: '0', textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: '3px' }}
-          >
-            Personalize for your student →
-          </button>
-        )}
         <p style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '8px', opacity: 0.6 }}>
           The Classical Academy · Colorado Springs, Colorado
         </p>
