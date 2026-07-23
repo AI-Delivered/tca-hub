@@ -896,13 +896,24 @@ export default function Home() {
             </button>
           </form>
 
-          {/* Chips — only on home screen */}
+          {/* Quick links + personalization — only on home screen */}
           {!hasConversation && (
             <>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'center', marginTop: '4px', maxHeight: '76px', overflow: 'hidden' }}>
-                {displayChips.map(s => (
-                  <button key={s} onClick={() => handleSuggestionClick(s)} className="tca-chip">{s}</button>
-                ))}
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap', marginTop: '4px' }}>
+                <button
+                  onClick={() => setShowCalendars(true)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '20px', padding: '7px 14px', color: 'var(--text-dim)', fontSize: '13px', cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s' }}
+                >
+                  Calendars & Schedules
+                </button>
+                <a
+                  href="https://www.tcatitans.org/family/staff-directory"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ display: 'inline-flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '20px', padding: '7px 14px', color: 'var(--text-dim)', fontSize: '13px', textDecoration: 'none', transition: 'all 0.15s' }}
+                >
+                  Staff Directory
+                </a>
               </div>
               {userCtx && (userCtx.campuses.length > 0 || userCtx.grades.length > 0) ? (
                 <button
