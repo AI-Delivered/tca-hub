@@ -100,10 +100,41 @@ export async function POST(req: NextRequest) {
     'parent teacher', 'conference', 'curriculum night', 'grandparent', 'fall festival',
     'spring fling', 'book fair', 'spirit week', 'talent show', 'science fair',
     'kindergarten', 'early out', 'early release', 'no school', 'teacher inservice',
+    'teacher workday', 'work day', 'professional development', 'pd day', 'inservice day',
     'first day', 'last day', 'winter break', 'spring break', 'fall break', 'thanksgiving',
     'christmas', 'halloween', 'valentines', 'auction', 'carnival',
+    'mlk', 'martin luther king', 'presidents day', 'labor day', 'memorial day',
+    'veterans day', 'columbus day', 'holiday',
   ]
-  const calTermMatch = calEventTerms.find(t => query.toLowerCase().includes(t))
+
+  // Broad "days off" queries — pull ALL monthly calendar chunks so the AI sees the full year
+  const daysOffQuery = /days off|day off|school calendar|no.school days|holidays|days? (out|closed)|when.*(off|closed|break)|schedule for the year/i.test(query)
+  if (daysOffQuery) {
+    const campusMap: Record<string, string> = {
+      'east': 'east-elementary-calendar',
+      'central': 'central-elementary-calendar',
+      'north': 'north-elementary-calendar',
+      'junior high': 'junior-high-calendar',
+      'jh': 'junior-high-calendar',
+      'high school': 'high-school-calendar',
+      'college pathways': 'college-pathways-calendar',
+      'cp': 'college-pathways-calendar',
+    }
+    const campusKey = Object.keys(campusMap).find(k => query.toLowerCase().includes(k))
+    const urlFilter = campusKey ? `%${campusMap[campusKey]}%` : '%-calendar%'
+    // Pull chunks that mention no school / break / workday / holiday across all months
+    const { data: daysOffRows } = await supabase
+      .from('page_chunks')
+      .select('url, title, content')
+      .ilike('url', urlFilter)
+      .or('content.ilike.%No School%,content.ilike.%no school%,content.ilike.%Break%,content.ilike.%Workday%,content.ilike.%Inservice%,content.ilike.%Holiday%,content.ilike.%Early Out%,content.ilike.%Early Release%')
+      .order('url', { ascending: true })
+      .limit(40)
+    const daysOffChunks = (daysOffRows ?? []).map(c => ({ ...c, similarity: 0.68 }))
+    keywordChunks = [...keywordChunks, ...daysOffChunks]
+  }
+
+  const calTermMatch = !daysOffQuery && calEventTerms.find(t => query.toLowerCase().includes(t))
   if (calTermMatch) {
     // Determine campus filter from query if mentioned
     const campusMap: Record<string, string> = {
