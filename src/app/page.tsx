@@ -336,10 +336,10 @@ const CALENDARS = [
 function CalendarPanel({ onClose }: { onClose: () => void }) {
   return (
     <div
-      style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: '0 0 max(20px, env(safe-area-inset-bottom, 20px))' }}
+      style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: '0 16px max(20px, env(safe-area-inset-bottom, 20px))' }}
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '20px', width: '100%', maxWidth: '480px', padding: '24px 20px 28px', maxHeight: '65vh', overflowY: 'auto' }}>
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '20px', width: '100%', maxWidth: '480px', padding: '24px 20px 28px', maxHeight: '85vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
           <h2 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>Calendars & Schedules</h2>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: '20px', cursor: 'pointer', padding: '0', lineHeight: 1 }}>✕</button>
@@ -1010,10 +1010,10 @@ export default function Home() {
         }}
       >
         <p style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '8px', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-          Built with love by a TCA family.
+          Built with love by a TCA family
         </p>
         <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '10px', lineHeight: 1.5 }}>
-          Want something like this for your organization? We can build it.
+          Designed with real family needs in mind to simplify everyday school life.
         </p>
         <a href="https://ai-delivered.com" target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '20px', padding: '7px 16px', color: 'var(--text-dim)', fontSize: '12px', textDecoration: 'none', fontWeight: 500, transition: 'all 0.15s' }}>
           ai-delivered.com →
