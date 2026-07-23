@@ -847,17 +847,9 @@ export default function Home() {
           }}
         >
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
-            <Image
-              src="/tca-logo.png"
-              alt="TCA Titans"
-              width={216}
-              height={220}
-              style={{ objectFit: 'contain', width: 'clamp(72px, 18vw, 108px)', height: 'auto' }}
-              priority
-            />
             <div style={{ textAlign: 'center' }}>
-              <h1 style={{ fontSize: 'clamp(20px, 4.8vw, 32px)', fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--text-primary)', lineHeight: 1.1, marginBottom: hasConversation ? '0' : '6px' }}>
-                TCA Hub
+              <h1 style={{ fontSize: 'clamp(28px, 7vw, 48px)', fontWeight: 300, letterSpacing: '-0.01em', color: 'var(--text-primary)', lineHeight: 1, marginBottom: hasConversation ? '0' : '6px' }}>
+                tca<span style={{ fontWeight: 600, color: 'var(--crimson)' }}>hub</span>
               </h1>
               {!hasConversation && (
                 <p style={{ fontSize: 'clamp(15px, 3.6vw, 22px)', fontWeight: 300, color: 'var(--text-dim)', whiteSpace: 'nowrap', overflow: 'hidden', maxWidth: '100%', paddingRight: '24px' }}>
@@ -918,28 +910,28 @@ export default function Home() {
               {/* Placeholder for disclaimer / additional copy */}
 
               {/* Built with love — shown below chips on home screen */}
-              <div style={{ textAlign: 'center', marginTop: '16px' }}>
-                <p style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '6px', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              <div style={{ marginTop: '16px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '12px', padding: '22px 20px', textAlign: 'center' }}>
+                <p style={{ fontSize: '13px', color: 'var(--text-dim)', marginBottom: '12px', letterSpacing: '0.12em', textTransform: 'uppercase', fontWeight: 500 }}>
                   Built with love by a TCA family
                 </p>
-                <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '2px', lineHeight: 1.6 }}>
+                <p style={{ fontSize: '13px', color: 'rgba(15,26,53,0.5)', marginBottom: '4px', lineHeight: 1.6 }}>
                   Designed with real family needs in mind to simplify everyday school life.
                 </p>
-                <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '2px', lineHeight: 1.6 }}>
+                <p style={{ fontSize: '13px', color: 'rgba(15,26,53,0.5)', marginBottom: '14px', lineHeight: 1.5 }}>
                   Want something like this for your organization?
                 </p>
-                <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '10px', lineHeight: 1.5 }}>
-                  We can build it.
+                <p style={{ fontSize: 'clamp(15px, 3.5vw, 18px)', fontWeight: 500, color: 'var(--text-primary)', lineHeight: 1.2, marginBottom: '16px' }}>
+                  We can build it for you too.
                 </p>
                 <a
                   href="https://ai-delivered.com/local"
                   target="_blank"
                   rel="noopener noreferrer"
-                  style={{ display: 'inline-flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '20px', padding: '7px 16px', color: 'var(--text-dim)', fontSize: '12px', textDecoration: 'none', fontWeight: 500, transition: 'all 0.15s' }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--crimson)'; (e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--crimson)' }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-dim)'; (e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--border)' }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'var(--crimson)', borderRadius: '20px', padding: '8px 20px', color: 'white', fontSize: '13px', textDecoration: 'none', fontWeight: 500, transition: 'opacity 0.15s' }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.opacity = '0.85' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.opacity = '1' }}
                 >
-                  ai-delivered.com →
+                  ai-delivered →
                 </a>
               </div>
             </>
