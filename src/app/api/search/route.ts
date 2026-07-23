@@ -165,9 +165,29 @@ export async function POST(req: NextRequest) {
     keywordChunks = [...keywordChunks, ...daysOffChunks]
   }
 
+  const sportTerms = [
+    'scrimmage', 'game', 'match', 'meet', 'tournament', 'playoff', 'championship',
+    'tryout', 'practice', 'athletics', 'sport', 'football', 'basketball', 'soccer',
+    'volleyball', 'baseball', 'softball', 'track', 'swim', 'cross country', 'wrestling',
+    'lacrosse', 'tennis', 'golf', 'cheer', 'dance',
+  ]
+  const isSportsQuery = !daysOffQuery && sportTerms.some(t => query.toLowerCase().includes(t))
   const calTermMatch = !daysOffQuery && calEventTerms.find(t => query.toLowerCase().includes(t))
-  if (calTermMatch) {
-    // Determine campus filter from query if mentioned
+
+  if (isSportsQuery) {
+    // Always anchor sports queries with the GoBound upcoming chunk — it's the authoritative
+    // aggregated view of all TCA athletics for the next 30 days with exact times.
+    // Give it the highest priority so it wins over TeamReach or sport-specific chunks.
+    const [{ data: gbUpcoming }, { data: gbSchedule }] = await Promise.all([
+      supabase.from('page_chunks').select('url, title, content').ilike('url', '%gobound%#upcoming%').limit(1),
+      supabase.from('page_chunks').select('url, title, content').ilike('url', '%gobound%calendar?v=list%').ilike('title', '%Upcoming%').limit(1),
+    ])
+    const gbChunks = [...(gbUpcoming ?? []), ...(gbSchedule ?? [])].map(c => ({ ...c, similarity: 0.90 }))
+    keywordChunks = [...gbChunks, ...keywordChunks]
+  }
+
+  if (calTermMatch && !isSportsQuery) {
+    // Non-sports calendar keyword — search campus calendars
     const campusMap: Record<string, string> = {
       'east': 'east-elementary-calendar',
       'central': 'central-elementary-calendar',
@@ -273,7 +293,7 @@ export async function POST(req: NextRequest) {
     },
   ]
 
-  const systemPrompt = `You are a helpful assistant for TCA (The Classical Academy) in Colorado Springs, talking directly with a TCA parent. Be warm and conversational — you're a knowledgeable friend who knows TCA inside and out, not a help desk writing a report.
+  const systemPrompt = `You are a helpful assistant for TCA (The Classical Academy) in Colorado Springs. Be warm and conversational — like a knowledgeable friend who knows TCA inside and out. You do not know who the user is or which student they have, so never assume "your team", "your student", "your child" unless they've told you their grade or campus in this conversation. Refer to teams by name (e.g. "TCA football", "the JH team") until they give you personal context.
 
 HARD RULE: Do not ask follow-up questions. Ever. Do not end with "Is there anything else I can help you with?", "Is that who you're looking for?", "Does that help?", or any question. Answer, then stop.
 
@@ -289,11 +309,12 @@ Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'lon
 
 Calendar data is authoritative: if the calendar context includes a month's events and a specific date in that month is NOT listed as a closure, no-school day, or break, then school IS in session on that date. You do not need to say "I'm not sure" — if you have the month's data and the date isn't listed as a closure, confidently say school is in session. Only express uncertainty if you don't have that month's calendar data at all.
 
-Sports schedule accuracy rule: The schedule data in context is exhaustive and level-specific. Events are tagged [Team Level (Sex)] — e.g., [Football Varsity (Boys)], [Football C-Squad (Boys)], [Football JH A (Boys)]. These tags are the authoritative source of truth. Rules:
-1. When asked about a specific level, ONLY list dates/times from events tagged with that EXACT level. If an event isn't tagged for that level, it does not apply — period.
-2. [Football C-Squad (Boys)] events are C-Squad only. They are not Varsity. Never include them in a Varsity answer.
-3. If no upcoming events for a requested level appear in context, say practice hasn't been scheduled yet and link to the GoBound calendar: https://gobound.com/co/schools/theclassahs/calendar?v=list — never make up GoBound URLs or add fragments like #football. That one URL covers all TCA sports.
-4. Never extrapolate, assume, or pattern-match from other levels or days. Only cite explicit events.
+Sports schedule accuracy rule: The schedule data comes from two sources — GoBound (authoritative, covers all TCA sports) and TeamReach (team-specific, may have different wording). When they conflict, GoBound wins. The "TCA Athletics — Upcoming" chunk is the most reliable source for times and dates. Rules:
+1. Use the time from the GoBound upcoming chunk. If TeamReach says a different time or calls something "tentative," defer to GoBound.
+2. When asked about a specific level, ONLY list dates/times from events tagged with that EXACT level.
+3. [Football C-Squad (Boys)] events are C-Squad only. They are not Varsity. Never include them in a Varsity answer.
+4. If no upcoming events appear in context, link to https://gobound.com/co/schools/theclassahs/calendar?v=list — never fabricate URLs.
+5. Never extrapolate, assume, or pattern-match from other levels or days. Only cite explicit events.
 
 Answer style:
 - Lead with the answer. No preamble ("Based on...", "According to...").
