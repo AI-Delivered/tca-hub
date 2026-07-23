@@ -56,10 +56,42 @@ interface Source {
   title: string
 }
 
+interface StaffCardData {
+  name: string
+  role: string
+  email: string
+  photo: string
+  campus: string
+}
+
 interface Exchange {
   query: string
   answer: string
   sources: Source[]
+  staffCard?: StaffCardData
+}
+
+function StaffCard({ card }: { card: StaffCardData }) {
+  if (!card.photo) return null
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: '14px',
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: '14px', padding: '14px 16px', marginBottom: '10px',
+    }}>
+      <img
+        src={card.photo}
+        alt={card.name}
+        style={{ width: '72px', height: '72px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0, background: 'var(--border)' }}
+        onError={e => { (e.target as HTMLImageElement).closest('[data-staff-card]')?.remove() }}
+      />
+      <div style={{ minWidth: 0 }}>
+        <p style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1px' }}>{card.name}</p>
+        <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '4px' }}>{card.role} · {card.campus}</p>
+        <a href={`mailto:${card.email}`} style={{ fontSize: '12px', color: 'var(--crimson)', textDecoration: 'none', fontWeight: 500 }}>{card.email}</a>
+      </div>
+    </div>
+  )
 }
 
 function loadContext(): TcaUserContext | null {
@@ -258,6 +290,91 @@ function PullToRefresh() {
           <path d="M8 2a6 6 0 1 0 6 6" stroke="white" strokeWidth="2" strokeLinecap="round"/>
           <path d="M14 3.5V1.5h-2" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
         </svg>
+      </div>
+    </div>
+  )
+}
+
+const CALENDARS = [
+  {
+    label: 'TCA Athletics',
+    desc: 'Games, meets, and tournaments — all sports',
+    ical: 'https://gobound.com/co/schools/theclassahs/calendar/ical/f4c41b333289444',
+  },
+  {
+    label: 'East Elementary',
+    desc: 'Events, holidays, and early outs for East',
+    ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,8,3',
+  },
+  {
+    label: 'Central Elementary',
+    desc: 'Events, holidays, and early outs for Central',
+    ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=2',
+  },
+  {
+    label: 'North Elementary',
+    desc: 'Events, holidays, and early outs for North',
+    ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,5',
+  },
+  {
+    label: 'Junior High',
+    desc: 'JH events, schedules, and campus dates',
+    ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=10',
+  },
+  {
+    label: 'High School',
+    desc: 'HS events, schedules, and campus dates',
+    ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=12',
+  },
+  {
+    label: 'College Pathways',
+    desc: 'CP events and campus dates',
+    ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=11,4',
+  },
+]
+
+function CalendarPanel({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: '0 0 max(20px, env(safe-area-inset-bottom, 20px))' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '20px', width: '100%', maxWidth: '480px', padding: '24px 20px 28px', maxHeight: '85vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
+          <h2 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>Calendars & Schedules</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: '20px', cursor: 'pointer', padding: '0', lineHeight: 1 }}>✕</button>
+        </div>
+        <a
+          href="https://www.tcatitans.org/calendar"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ display: 'block', background: 'var(--crimson)', color: '#fff', borderRadius: '10px', padding: '11px 14px', textDecoration: 'none', marginBottom: '14px', fontSize: '13px', fontWeight: 600 }}
+        >
+          View full TCA calendar on tcatitans.org →
+        </a>
+        <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '14px', lineHeight: 1.5 }}>
+          Subscribe to add TCA calendars directly to Apple Calendar or Google Calendar — they stay up to date automatically.
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {CALENDARS.map(cal => {
+            const webcal = cal.ical.replace(/^https?:/, 'webcal:')
+            const google = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}`
+            return (
+              <div key={cal.label} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px 14px' }}>
+                <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '2px' }}>{cal.label}</p>
+                <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '10px' }}>{cal.desc}</p>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <a href={webcal} style={{ flex: 1, textAlign: 'center', padding: '7px 10px', borderRadius: '8px', background: 'rgba(255,255,255,0.08)', border: '1px solid var(--border)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 600, textDecoration: 'none' }}>
+                    Apple Calendar
+                  </a>
+                  <a href={google} target="_blank" rel="noopener noreferrer" style={{ flex: 1, textAlign: 'center', padding: '7px 10px', borderRadius: '8px', background: 'rgba(255,255,255,0.08)', border: '1px solid var(--border)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 600, textDecoration: 'none' }}>
+                    Google Calendar
+                  </a>
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </div>
     </div>
   )
@@ -529,12 +646,14 @@ export default function Home() {
   const [exchanges, setExchanges] = useState<Exchange[]>([])
   const [streamingAnswer, setStreamingAnswer] = useState('')
   const [streamingSources, setStreamingSources] = useState<Source[]>([])
+  const [streamingStaffCard, setStreamingStaffCard] = useState<StaffCardData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [isFocused, setIsFocused] = useState(false)
   const [chips, setChips] = useState<string[]>(DEFAULT_CHIPS)
   const [userCtx, setUserCtx] = useState<TcaUserContext | null>(null)
   const [showOnboarding, setShowOnboarding] = useState(false)
+  const [showCalendars, setShowCalendars] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -601,6 +720,7 @@ export default function Home() {
     setError('')
     setStreamingAnswer('')
     setStreamingSources([])
+    setStreamingStaffCard(null)
 
     // Build conversation history from prior exchanges (clean text, no context prefix)
     const history = exchanges.flatMap(ex => [
@@ -625,6 +745,7 @@ export default function Home() {
       let buffer = ''
       let finalAnswer = ''
       let finalSources: Source[] = []
+      let finalStaffCard: StaffCardData | null = null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -637,10 +758,13 @@ export default function Home() {
         for (const line of lines) {
           if (!line.trim()) continue
           try {
-            const event = JSON.parse(line) as { type: string; sources?: Source[]; text?: string; message?: string }
+            const event = JSON.parse(line) as { type: string; sources?: Source[]; text?: string; message?: string; staffCard?: StaffCardData }
             if (event.type === 'sources' && event.sources) {
               finalSources = event.sources
               setStreamingSources(event.sources)
+            } else if (event.type === 'staffCard' && event.staffCard) {
+              finalStaffCard = event.staffCard
+              setStreamingStaffCard(event.staffCard)
             } else if (event.type === 'text' && event.text) {
               finalAnswer += event.text
               setStreamingAnswer(prev => prev + event.text)
@@ -652,10 +776,11 @@ export default function Home() {
       }
 
       if (finalAnswer) {
-        setExchanges(prev => [...prev, { query: rawQ, answer: finalAnswer, sources: finalSources }])
+        setExchanges(prev => [...prev, { query: rawQ, answer: finalAnswer, sources: finalSources, staffCard: finalStaffCard ?? undefined }])
       }
       setStreamingAnswer('')
       setStreamingSources([])
+      setStreamingStaffCard(null)
       setQuery('')
 
       setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 80)
@@ -685,6 +810,7 @@ export default function Home() {
     setExchanges([])
     setStreamingAnswer('')
     setStreamingSources([])
+    setStreamingStaffCard(null)
     setQuery('')
     setError('')
     setLoading(false)
@@ -730,28 +856,14 @@ export default function Home() {
               priority
             />
             <div style={{ textAlign: 'center' }}>
-              <p style={{ fontSize: '11px', letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: '8px', fontWeight: 500 }}>
-                The Classical Academy
-              </p>
-              <h1
-                style={{
-                  fontSize: 'clamp(18px, 4.8vw, 34px)',
-                  fontWeight: 300,
-                  letterSpacing: '-0.02em',
-                  color: 'var(--text-primary)',
-                  lineHeight: 1.2,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  maxWidth: '100%',
-                  paddingRight: '24px',
-                }}
-              >
-                {hasConversation ? (
-                  <span style={{ fontSize: 'clamp(20px, 3vw, 28px)' }}>TCA Hub</span>
-                ) : (
-                  <>Ask about <CyclingText /></>
-                )}
+              <h1 style={{ fontSize: 'clamp(20px, 4.8vw, 32px)', fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--text-primary)', lineHeight: 1.1, marginBottom: hasConversation ? '0' : '6px' }}>
+                TCA Hub
               </h1>
+              {!hasConversation && (
+                <p style={{ fontSize: 'clamp(15px, 3.6vw, 22px)', fontWeight: 300, color: 'var(--text-dim)', whiteSpace: 'nowrap', overflow: 'hidden', maxWidth: '100%', paddingRight: '24px' }}>
+                  Ask about <CyclingText />
+                </p>
+              )}
             </div>
           </div>
 
@@ -834,6 +946,7 @@ export default function Home() {
             {/* Active streaming exchange — always at top */}
             {(loading || streamingAnswer) && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {streamingStaffCard && <StaffCard card={streamingStaffCard} />}
                 <AnswerCard
                   answer={streamingAnswer}
                   sources={streamingSources}
@@ -853,6 +966,7 @@ export default function Home() {
                       "{ex.query}"
                     </p>
                   )}
+                  {ex.staffCard && <StaffCard card={ex.staffCard} />}
                   <AnswerCard
                     answer={ex.answer}
                     sources={ex.sources}
@@ -869,6 +983,7 @@ export default function Home() {
       </main>
 
       {showOnboarding && <OnboardingModal onSave={handleSaveContext} onSkip={handleSkipOnboarding} />}
+      {showCalendars && <CalendarPanel onClose={() => setShowCalendars(false)} />}
       <PullToRefresh />
       <AddToHomePrompt />
 
@@ -883,14 +998,13 @@ export default function Home() {
           flexShrink: 0,
         }}
       >
-        <p style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '10px', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+        <p style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '8px', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
           Built with love by a TCA family.
         </p>
-        <a href="https://ai-delivered.com" target="_blank" rel="noopener noreferrer" className="tca-cta-pill">
-          <span className="tca-cta-text">Want something like this for your organization?</span>
-          <span className="tca-cta-url">ai-delivered.com →</span>
-        </a>
-        <a href="https://ai-delivered.com" target="_blank" rel="noopener noreferrer" className="tca-cta-mobile">
+        <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '10px', lineHeight: 1.5 }}>
+          Want something like this for your organization? We can build it.
+        </p>
+        <a href="https://ai-delivered.com" target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '20px', padding: '7px 16px', color: 'var(--text-dim)', fontSize: '12px', textDecoration: 'none', fontWeight: 500, transition: 'all 0.15s' }}>
           ai-delivered.com →
         </a>
       </footer>

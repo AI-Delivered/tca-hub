@@ -10,11 +10,42 @@ const FEEDS = [
     label: 'TCA Athletics',
     deletePattern: '%gobound%ical%',
   },
+  // Per-campus Finalsite calendar feeds — IDs discovered from data-calendar-ids attributes
   {
-    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=8',
-    source: 'https://www.tcatitans.org/calendar',
-    label: 'TCA School Calendar',
-    deletePattern: '%tcatitans.org/calendar%',
+    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,8,3',
+    source: 'https://www.tcatitans.org/schools/east-elementary/east-elementary-calendar',
+    label: 'East Elementary Calendar',
+    deletePattern: '%east-elementary-calendar%',
+  },
+  {
+    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=2',
+    source: 'https://www.tcatitans.org/schools/central-elementary/central-elementary-calendar',
+    label: 'Central Elementary Calendar',
+    deletePattern: '%central-elementary-calendar%',
+  },
+  {
+    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,5',
+    source: 'https://www.tcatitans.org/schools/north-elementary/north-elementary-calendar',
+    label: 'North Elementary Calendar',
+    deletePattern: '%north-elementary-calendar%',
+  },
+  {
+    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=11,4',
+    source: 'https://www.tcatitans.org/schools/college-pathways/college-pathways-calendar',
+    label: 'College Pathways Calendar',
+    deletePattern: '%college-pathways-calendar%',
+  },
+  {
+    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=10',
+    source: 'https://www.tcatitans.org/schools/junior-high/junior-high-calendar',
+    label: 'Junior High Calendar',
+    deletePattern: '%junior-high-calendar%',
+  },
+  {
+    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=12',
+    source: 'https://www.tcatitans.org/schools/high-school/high-school-calendar',
+    label: 'High School Calendar',
+    deletePattern: '%high-school-calendar%',
   },
 ]
 
@@ -30,6 +61,7 @@ interface CalEvent {
   start: string
   end: string
   location: string
+  description: string
   activity: string
   level: string
   sex: string
@@ -49,6 +81,7 @@ function parseIcal(text: string): CalEvent[] {
       start: startRaw,
       end: get('DTEND'),
       location: get('LOCATION'),
+      description: get('DESCRIPTION'),
       activity: get('X-BND-ACTIVITYNAME'),
       level: get('X-BND-ACTIVITYLEVEL'),
       sex: get('X-BND-ACTIVITYSEX'),
@@ -117,15 +150,25 @@ export async function GET(req: NextRequest) {
     const ical = await res.text()
     const events = parseIcal(ical)
 
-    // Group by activity (athletics) or by month (school calendar)
+    // Group by activity (athletics), by month (school calendar), or by event type (teamreach)
     const isAthletics = feed.label.includes('Athletics')
+    const isTeamreach = 'teamreach' in feed && feed.teamreach === true
     const groups: Record<string, CalEvent[]> = {}
+
+    const teamreachEventType = (summary: string): string => {
+      const s = summary.toLowerCase()
+      if (s.includes(' game') || s.includes('vs ')) return 'Games'
+      if (s.includes('practice') || s.includes('drills') || s.includes('weights') || s.includes('scrimmage') || s.includes('camp')) return 'Practices & Training'
+      return 'Events'
+    }
 
     for (const e of events) {
       let key: string
       if (isAthletics) {
         const sexLabel = e.sex === 'female' ? ' (Girls)' : e.sex === 'male' ? ' (Boys)' : ''
         key = `${e.activity || 'General'}${e.level ? ' ' + e.level : ''}${sexLabel}`
+      } else if (isTeamreach) {
+        key = teamreachEventType(e.summary)
       } else {
         // Group school calendar events by month
         const d = parseDate(e.start)
@@ -135,8 +178,8 @@ export async function GET(req: NextRequest) {
       groups[key].push(e)
     }
 
-    // Upcoming chunk (next 30 days) for both feeds
-    const cutoff = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+    // Upcoming chunk (next 90 days) for all feeds
+    const cutoff = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000)
     const upcoming = events
       .filter(e => { const d = parseDate(e.start); return d >= new Date() && d <= cutoff })
       .sort((a, b) => parseDate(a.start).getTime() - parseDate(b.start).getTime())
@@ -147,7 +190,7 @@ export async function GET(req: NextRequest) {
 
     const chunks: Array<{ url: string; title: string; content: string }> = []
 
-    const formatEvent = (e: CalEvent) => {
+    const formatEvent = (e: CalEvent, includeDescription = false) => {
       // For all-day multi-day events, iCal DTEND is exclusive (the day after last day)
       const startDay = e.start.replace(/T.*/, '')
       let endDay = e.end.replace(/T.*/, '')
@@ -160,19 +203,43 @@ export async function GET(req: NextRequest) {
       const dateStr = (endDay && endDay !== startDay)
         ? `${formatDate(e.start)} – ${formatDate(endDay)}`
         : formatDate(e.start)
-      return `  ${dateStr}: ${e.summary}${e.location ? ' @ ' + e.location : ''}`
+      const desc = includeDescription && e.description
+        ? '\n    ' + e.description.replace(/\\n/g, '\n    ').replace(/\\,/g, ',').replace(/\^\^/g, '').trim()
+        : ''
+      return `  ${dateStr}: ${e.summary}${e.location ? ' @ ' + e.location : ''}${desc}`
     }
 
     if (upcoming.length) {
       const lines = [`${feed.label} — Upcoming Events (next 30 days):`]
-      for (const e of upcoming) lines.push(formatEvent(e))
+      for (const e of upcoming) {
+        if (isAthletics && (e.activity || e.level)) {
+          const sexLabel = e.sex === 'female' ? ' (Girls)' : e.sex === 'male' ? ' (Boys)' : ''
+          const groupKey = `${e.activity || 'General'}${e.level ? ' ' + e.level : ''}${sexLabel}`
+          lines.push(`  [${groupKey}]${formatEvent(e).trimStart() ? ' ' + formatEvent(e).trimStart() : ''}`)
+        } else if (isTeamreach) {
+          const typeKey = teamreachEventType(e.summary)
+          lines.push(`  [${typeKey}]${formatEvent(e, true).trimStart() ? ' ' + formatEvent(e, true).trimStart() : ''}`)
+        } else {
+          lines.push(formatEvent(e))
+        }
+      }
       chunks.push({ url: feed.source + '#upcoming', title: `${feed.label} — Upcoming`, content: lines.join('\n') })
     }
 
     for (const [groupName, evts] of Object.entries(groups)) {
       evts.sort((a, b) => parseDate(a.start).getTime() - parseDate(b.start).getTime())
-      const lines = [`${feed.label} — ${groupName}:`]
-      for (const e of evts) lines.push(formatEvent(e))
+      const lines = isTeamreach
+        ? [`${feed.label} — ${groupName}:`]
+        : [`${feed.label} — ${groupName}:`, `(All events below are for ${groupName} only — no other levels):`]
+      for (const e of evts) {
+        if (isAthletics) {
+          lines.push(`  [${groupName}]${formatEvent(e).trimStart() ? ' ' + formatEvent(e).trimStart() : ''}`)
+        } else if (isTeamreach) {
+          lines.push(formatEvent(e, true))
+        } else {
+          lines.push(formatEvent(e))
+        }
+      }
       chunks.push({
         url: `${feed.source}#${groupName.toLowerCase().replace(/[\s/(),]+/g, '-')}`,
         title: `${feed.label} — ${groupName}`,
