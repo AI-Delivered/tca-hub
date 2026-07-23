@@ -107,7 +107,9 @@ export async function POST(req: NextRequest) {
     'veterans day', 'columbus day', 'holiday',
   ]
 
-  // Broad "days off" queries — pull ALL monthly calendar chunks so the AI sees the full year
+  // Broad "days off" queries — pull ALL monthly calendar chunks so the AI sees the full year.
+  // Do NOT filter by content or sort alphabetically — that causes fall/oct months to be cut off.
+  // Instead: fetch all monthly chunks for each campus (identified by #month- in URL), limit high.
   const daysOffQuery = /days off|day off|school calendar|no.school days|holidays|days? (out|closed)|when.*(off|closed|break)|schedule for the year/i.test(query)
   if (daysOffQuery) {
     const campusMap: Record<string, string> = {
@@ -122,14 +124,14 @@ export async function POST(req: NextRequest) {
     }
     const campusKey = Object.keys(campusMap).find(k => query.toLowerCase().includes(k))
     const urlFilter = campusKey ? `%${campusMap[campusKey]}%` : '%-calendar%'
-    // Pull chunks that mention no school / break / workday / holiday across all months
+    // Pull all monthly chunks (URL has a #month-year fragment) — no content filter so no months get cut off
     const { data: daysOffRows } = await supabase
       .from('page_chunks')
       .select('url, title, content')
       .ilike('url', urlFilter)
-      .or('content.ilike.%No School%,content.ilike.%no school%,content.ilike.%Break%,content.ilike.%Workday%,content.ilike.%Inservice%,content.ilike.%Holiday%,content.ilike.%Early Out%,content.ilike.%Early Release%')
-      .order('url', { ascending: true })
-      .limit(40)
+      .ilike('url', '%#%')
+      .not('url', 'ilike', '%#upcoming%')
+      .limit(80)
     const daysOffChunks = (daysOffRows ?? []).map(c => ({ ...c, similarity: 0.68 }))
     keywordChunks = [...keywordChunks, ...daysOffChunks]
   }
