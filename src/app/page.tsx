@@ -416,7 +416,7 @@ function AddToHomePrompt() {
             Add TCA Hub to your home screen
           </p>
           <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: '13px', lineHeight: 1.45 }}>
-            Tap <strong style={{ color: '#fff' }}>···</strong> in the top right corner, then <strong style={{ color: '#fff' }}>Share</strong>, then <strong style={{ color: '#fff' }}>"Add to Home Screen."</strong>
+            Tap the <strong style={{ color: '#fff' }}>Share</strong> button at the bottom of your screen, then <strong style={{ color: '#fff' }}>"Add to Home Screen."</strong>
           </p>
         </div>
         <button onClick={dismiss} style={{ color: 'rgba(255,255,255,0.5)', background: 'none', border: 'none', fontSize: '20px', lineHeight: 1, cursor: 'pointer', padding: '0', flexShrink: 0, marginTop: '1px' }}>✕</button>
