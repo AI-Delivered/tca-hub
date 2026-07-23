@@ -923,7 +923,10 @@ export default function Home() {
                   Built with love by a TCA family
                 </p>
                 <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '2px', lineHeight: 1.6 }}>
-                  Designed with real family needs in mind to simplify everyday school life. Want something like this for your organization?
+                  Designed with real family needs in mind to simplify everyday school life.
+                </p>
+                <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '2px', lineHeight: 1.6 }}>
+                  Want something like this for your organization?
                 </p>
                 <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '10px', lineHeight: 1.5 }}>
                   We can build it.
