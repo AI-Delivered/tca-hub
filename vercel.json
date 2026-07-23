@@ -6,6 +6,7 @@
     { "path": "/api/crawl/ingest-ical", "schedule": "0 */6 * * *" },
     { "path": "/api/crawl/ingest-rosters", "schedule": "0 6 * * *" },
     { "path": "/api/crawl/ingest-stats", "schedule": "0 7 * * *" },
-    { "path": "/api/crawl/ingest-calendar", "schedule": "0 */4 * * *" }
+    { "path": "/api/crawl/ingest-calendar", "schedule": "0 */4 * * *" },
+    { "path": "/api/crawl/ingest-staff", "schedule": "0 2 * * 0" }
   ]
 }

@@ -3,175 +3,109 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 
 export const maxDuration = 300
 
+// Curated pages that are important but may not surface in the main BFS crawl
+const SEED_PAGES = [
+  { url: 'https://www.tcatitans.org/schools/junior-high/seventh-grade/class-of-2030-welcome-to-junior-high', title: 'TCA Junior High — Welcome to 7th Grade' },
+  { url: 'https://www.tcatitans.org/schools/high-school/academics/graduation-requirements', title: 'TCA High School Graduation Requirements' },
+  { url: 'https://www.tcatitans.org/schools/high-school/student-life/clubs-activities', title: 'TCA High School Clubs & Activities' },
+  { url: 'https://www.tcatitans.org/schools/junior-high/student-life', title: 'TCA Junior High Student Life' },
+  { url: 'https://www.tcatitans.org/family/transportation', title: 'TCA Transportation & Busing' },
+  { url: 'https://www.tcatitans.org/family/health-services', title: 'TCA Health Services' },
+  { url: 'https://www.tcatitans.org/family/volunteer', title: 'TCA Volunteering' },
+  { url: 'https://www.tcatitans.org/about/mission-vision', title: 'TCA Mission & Vision' },
+  { url: 'https://www.tcatitans.org/schools/college-pathways/programs', title: 'TCA College Pathways Programs' },
+  { url: 'https://www.tcatitans.org/schools/cottage-school', title: 'TCA Cottage School' },
+  { url: 'https://www.tcatitans.org/enroll', title: 'TCA Enrollment' },
+  { url: 'https://www.tcatitans.org/family/school-hoursbell-schedule', title: 'TCA Bell Schedule & School Hours' },
+  { url: 'https://www.tcatitans.org/family/dress-code', title: 'TCA Dress Code' },
+  { url: 'https://www.tcatitans.org/family/attendance-absences', title: 'TCA Attendance & Absences' },
+  { url: 'https://www.tcatitans.org/family/lunch-information', title: 'TCA Lunch Information' },
+]
+
 function isAuthorized(req: NextRequest): boolean {
   if (req.headers.get('x-vercel-cron') === '1') return true
+  const secret = req.nextUrl.searchParams.get('secret')
+  if (secret === process.env.CRAWL_SECRET) return true
   return req.headers.get('authorization') === `Bearer ${process.env.CRAWL_SECRET}`
 }
 
-function chunkText(text: string, chunkSize = 1800, overlap = 200): string[] {
+function htmlToText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+    .replace(/<header[\s\S]*?<\/header>/gi, ' ')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+    .replace(/<\/(p|div|li|tr|h[1-6]|section|article|td|th)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
+    .replace(/&#\d+;/g, ' ').replace(/&[a-z]+;/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n\s*\n/g, '\n\n')
+    .trim()
+}
+
+function chunkText(text: string, size = 1800, overlap = 200): string[] {
   const chunks: string[] = []
   let start = 0
   while (start < text.length) {
-    chunks.push(text.slice(start, start + chunkSize))
-    start += chunkSize - overlap
+    chunks.push(text.slice(start, start + size))
+    start += size - overlap
   }
   return chunks
 }
 
-function extractTcaUrls(text: string): string[] {
-  const found = new Set<string>()
-  const patterns = [
-    // Markdown links and plain URLs
-    /https?:\/\/www\.tcatitans\.org\/[^\s\)\]"'<>]+/g,
-    // Relative /fs/pages/ and /fs/resource-manager/ paths
-    /(?:href=["'])(\/fs\/(?:pages|resource-manager\/view)\/[^"']+)/g,
-  ]
-  for (const re of patterns) {
-    const matches = text.matchAll(re)
-    for (const m of matches) {
-      let url = m[1] ?? m[0]
-      // Make relative paths absolute
-      if (url.startsWith('/')) url = `https://www.tcatitans.org${url}`
-      // Strip anchors and trailing punctuation
-      url = url.replace(/#.*$/, '').replace(/[.,;)]+$/, '').trim()
-      if (url.startsWith('https://www.tcatitans.org')) found.add(url)
-    }
-  }
-  return [...found]
-}
-
-// Skip URLs that are navigation/shell pages unlikely to have useful content
-const IMAGE_EXTS = /\.(jpe?g|png|gif|webp|svg|ico|bmp|tiff?)(\?.*)?$/i
-const SKIP_PATTERNS = [
-  '/giving/', '/alumni', '/titan-club', '/tca-moments-blog',
-  '/explore-tca/tca-titan-of-the-year', '/sitemap', '/login',
-  '/logout', '/search', '?const_page=', 'javascript:',
-  '/uploaded/staff_photos', '/uploaded/Staff_Photos',
-  '/uploaded/images', '/uploaded/photos',
-]
-
-function isLikelyUseful(url: string): boolean {
-  if (IMAGE_EXTS.test(url)) return false
-  return !SKIP_PATTERNS.some(s => url.includes(s))
-}
-
-export async function POST(req: NextRequest) {
+export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { VoyageAIClient } = await import('voyageai')
-  const { default: FirecrawlApp } = await import('@mendable/firecrawl-js')
   const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })
-  const firecrawl = new FirecrawlApp({ apiKey: process.env.FIRECRAWL_API_KEY })
   const supabase = getSupabaseAdmin()
-
-  // 1. Get all URLs already indexed (just URLs, not full content)
-  const { data: urlRows } = await supabase
-    .from('page_chunks')
-    .select('url')
-
-  const indexedUrls = new Set((urlRows ?? []).map(r => r.url))
-
-  // 2. Extract TCA URLs from a sample of content (avoid pulling all 1200+ chunks)
-  const { data: contentRows } = await supabase
-    .from('page_chunks')
-    .select('content')
-    .limit(300)
-
-  const referencedUrls = new Set<string>()
-  for (const row of contentRows ?? []) {
-    for (const url of extractTcaUrls(row.content)) {
-      referencedUrls.add(url)
-    }
-  }
-
-  // 3. Find the gap: referenced but not indexed, and likely useful
-  const toScrape = [...referencedUrls].filter(
-    url => !indexedUrls.has(url) && isLikelyUseful(url)
-  )
-
-  // Also add known high-value pages that may have been missed
-  const mustHave = [
-    'https://www.tcatitans.org/fs/pages/806', // Central Elementary hours
-    'https://www.tcatitans.org/fs/pages/807', // East Elementary hours
-    'https://www.tcatitans.org/fs/pages/808', // North Elementary hours (guess)
-    'https://www.tcatitans.org/fs/pages/809',
-    'https://www.tcatitans.org/fs/pages/810',
-    'https://www.tcatitans.org/fs/pages/811', // Summer reading
-    'https://www.tcatitans.org/fs/pages/812', // Supply lists
-    'https://www.tcatitans.org/fs/pages/813', // State assessments
-    'https://www.tcatitans.org/family/school-hoursbell-schedule',
-    'https://www.tcatitans.org/family/dress-code',
-    'https://www.tcatitans.org/family/student-handbook',
-    'https://www.tcatitans.org/family/lunch-information',
-    'https://www.tcatitans.org/family/attendance-absences',
-    'https://www.tcatitans.org/schools/high-school/bell-schedule',
-    'https://www.tcatitans.org/schools/junior-high/bell-schedule',
-  ]
-  for (const url of mustHave) {
-    if (!indexedUrls.has(url)) toScrape.push(url)
-  }
-
-  // Dedupe — cap at 30 per run to stay within Firecrawl rate limits
-  const queue = [...new Set(toScrape)].slice(0, 30)
-
+  const now = new Date().toISOString()
   let indexed = 0, skipped = 0, errors = 0
-  const newUrls: string[] = []
-  const errorSamples: string[] = []
 
-  for (const url of queue) {
+  for (const page of SEED_PAGES) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await (firecrawl.scrapeUrl as any)(url, {
-        formats: ['markdown'],
+      const res = await fetch(page.url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; TCAHub/1.0)' },
+        signal: AbortSignal.timeout(8000),
       })
+      if (!res.ok) { skipped++; continue }
 
-      const content: string = result?.markdown ?? ''
-      const title: string = result?.metadata?.title ?? result?.metadata?.ogTitle ?? url
+      const html = await res.text()
+      const text = htmlToText(html)
+      if (text.length < 150) { skipped++; continue }
 
-      // Skip low-quality pages (mostly nav, no real content)
-      const stripped = content.replace(/\[.*?\]\(.*?\)/g, '').replace(/#+\s/g, '').trim()
-      if (stripped.length < 150) { skipped++; continue }
+      await supabase.from('page_chunks').delete().eq('url', page.url)
 
-      // Delete old chunks for this URL and re-index
-      await supabase.from('page_chunks').delete().eq('url', url)
-
-      const chunks = chunkText(content)
-      const embeddingRes = await voyage.embed({
+      const chunks = chunkText(text)
+      const embRes = await voyage.embed({
         input: chunks.map(c => c.slice(0, 16000)),
         model: 'voyage-3-lite',
       })
 
       for (let i = 0; i < chunks.length; i++) {
-        const embedding = embeddingRes.data?.[i]?.embedding
+        const embedding = embRes.data?.[i]?.embedding
         if (!embedding) continue
         const { error } = await supabase.from('page_chunks').insert({
-          url, title, content: chunks[i], embedding,
+          url: page.url,
+          title: page.title,
+          content: chunks[i],
+          embedding,
+          crawled_at: now,
         })
         if (error) errors++; else indexed++
       }
-      newUrls.push(url)
-
-      // Respect Firecrawl rate limit (~30 req/min on hobby plan)
-      await new Promise(r => setTimeout(r, 2200))
-    } catch (e) {
+    } catch {
       errors++
-      if (errorSamples.length < 3) errorSamples.push(`${url}: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
-  return NextResponse.json({
-    queued: queue.length,
-    indexed,
-    skipped,
-    errors,
-    newPages: newUrls.length,
-    sample: newUrls.slice(0, 10),
-    errorSamples,
-    queueSample: queue.slice(0, 5),
-  })
+  return NextResponse.json({ pages: SEED_PAGES.length, indexed, skipped, errors })
 }
 
-export async function GET(req: NextRequest) {
-  if (!isAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  return POST(req)
+export async function POST(req: NextRequest) {
+  return GET(req)
 }
