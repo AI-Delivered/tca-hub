@@ -105,6 +105,10 @@ export async function POST(req: NextRequest) {
     'christmas', 'halloween', 'valentines', 'auction', 'carnival',
     'mlk', 'martin luther king', 'presidents day', 'labor day', 'memorial day',
     'veterans day', 'columbus day', 'holiday',
+    'scrimmage', 'game', 'match', 'meet', 'tournament', 'playoff', 'championship',
+    'tryout', 'practice', 'athletics', 'sport', 'football', 'basketball', 'soccer',
+    'volleyball', 'baseball', 'softball', 'track', 'swim', 'cross country', 'wrestling',
+    'lacrosse', 'tennis', 'golf', 'cheer', 'dance',
   ]
 
   // Broad "days off" queries — pull ALL monthly calendar chunks so the AI sees the full year.
