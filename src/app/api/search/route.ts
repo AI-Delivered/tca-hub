@@ -111,9 +111,8 @@ export async function POST(req: NextRequest) {
     'lacrosse', 'tennis', 'golf', 'cheer', 'dance',
   ]
 
-  // Broad "days off" queries — pull ALL monthly calendar chunks so the AI sees the full year.
-  // Do NOT filter by content or sort alphabetically — that causes fall/oct months to be cut off.
-  // Instead: fetch all monthly chunks for each campus (identified by #month- in URL), limit high.
+  // Broad "days off" queries — pull monthly calendar chunks for the current school year.
+  // Only include months from the current month onward so the AI isn't confused by past events.
   const daysOffQuery = /days off|day off|school calendar|no.school days|holidays|days? (out|closed)|when.*(off|closed|break)|schedule for the year/i.test(query)
   if (daysOffQuery) {
     const campusMap: Record<string, string> = {
@@ -128,13 +127,41 @@ export async function POST(req: NextRequest) {
     }
     const campusKey = Object.keys(campusMap).find(k => query.toLowerCase().includes(k))
     const urlFilter = campusKey ? `%${campusMap[campusKey]}%` : '%-calendar%'
-    // Pull all monthly chunks — pattern: ...calendar#month-202X (never matches #upcoming)
-    // Run two queries (2026 + 2027) and merge to ensure full year coverage
-    const [{ data: rows2026 }, { data: rows2027 }] = await Promise.all([
-      supabase.from('page_chunks').select('url, title, content').ilike('url', urlFilter).ilike('url', '%-2026').limit(50),
-      supabase.from('page_chunks').select('url, title, content').ilike('url', urlFilter).ilike('url', '%-2027').limit(50),
-    ])
-    const daysOffChunks = [...(rows2026 ?? []), ...(rows2027 ?? [])].map(c => ({ ...c, similarity: 0.68 }))
+
+    // Build list of future month-year slugs for the 2026-27 school year
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Denver' }))
+    const monthNames = ['january','february','march','april','may','june','july','august','september','october','november','december']
+    const futureMonthSlugs: string[] = []
+    // School year: Aug 2026 – Jun 2027
+    const schoolYearMonths = [
+      [7,2026],[8,2026],[9,2026],[10,2026],[11,2026],[0,2027],[1,2027],[2,2027],[3,2027],[4,2027],[5,2027],
+    ]
+    for (const [m, y] of schoolYearMonths) {
+      if (y > now.getFullYear() || (y === now.getFullYear() && m >= now.getMonth())) {
+        futureMonthSlugs.push(`%${monthNames[m]}-${y}`)
+      }
+    }
+
+    // Fetch all future months in parallel (one query per month-year slug, deduplicated by campus)
+    // Use High School as the canonical source for school-wide no-school days; add others for campus-specific events
+    const canonicalFilter = campusKey ? urlFilter : '%high-school-calendar%'
+    const canonicalRows = await Promise.all(
+      futureMonthSlugs.map(slug =>
+        supabase.from('page_chunks').select('url, title, content').ilike('url', canonicalFilter).ilike('url', slug).limit(1)
+      )
+    )
+    // If no campus specified, also pull elementary + JH chunks for campus-specific events
+    const extraRows = campusKey ? [] : await Promise.all(
+      futureMonthSlugs.flatMap(slug => [
+        supabase.from('page_chunks').select('url, title, content').ilike('url', '%east-elementary-calendar%').ilike('url', slug).limit(1),
+        supabase.from('page_chunks').select('url, title, content').ilike('url', '%junior-high-calendar%').ilike('url', slug).limit(1),
+      ])
+    )
+    const allDaysOffRows = [
+      ...canonicalRows.flatMap(r => r.data ?? []),
+      ...extraRows.flatMap(r => r.data ?? []),
+    ]
+    const daysOffChunks = allDaysOffRows.map(c => ({ ...c, similarity: 0.72 }))
     keywordChunks = [...keywordChunks, ...daysOffChunks]
   }
 
@@ -258,7 +285,7 @@ High school grade levels: 9th = Freshman, 10th = Sophomore, 11th = Junior, 12th 
 
 Be smart about context: sports (football, basketball, soccer, wrestling, cheer, etc.), athletics schedules, and team-specific questions only apply to Junior High and High School — never mention elementary in those answers unless the parent specifically brings it up. Literacy testing (DIBELS, reading assessments, oral reading fluency, etc.) only applies to elementary campuses (Central, East, North) — never reference it for Junior High or High School. If the parent has a 5th grader and asks about football, answer for JH/HS and don't add a note about the elementary student.
 
-Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current school year is 2026-27. For calendar events: only cite dates that are in the future (after today). If you only have a past date for a recurring annual event, say "Last year it was [date] — the 2026-27 date hasn't been posted yet" rather than citing the past date as the answer. Never present a date that has already passed as if it answers "when is X."
+Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current school year is 2026-27. Any date in 2026 that is after today, and all dates in 2027, are FUTURE dates — do not call them past. A date is only "past" if it is before today's date. For calendar events: only answer with future dates. If you only have a past date for a recurring annual event, say "Last year it was [date] — the 2026-27 date hasn't been posted yet." Never call a future date "already passed."
 
 Sports schedule accuracy rule: The schedule data in context is exhaustive and level-specific. Events are tagged [Team Level (Sex)] — e.g., [Football Varsity (Boys)], [Football C-Squad (Boys)], [Football JH A (Boys)]. These tags are the authoritative source of truth. Rules:
 1. When asked about a specific level, ONLY list dates/times from events tagged with that EXACT level. If an event isn't tagged for that level, it does not apply — period.
