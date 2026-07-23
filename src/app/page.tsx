@@ -931,7 +931,14 @@ export default function Home() {
                 <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '10px', lineHeight: 1.5 }}>
                   We can build it.
                 </p>
-                <a href="https://ai-delivered.com" target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '20px', padding: '7px 16px', color: 'var(--text-dim)', fontSize: '12px', textDecoration: 'none', fontWeight: 500, transition: 'all 0.15s' }}>
+                <a
+                  href="https://ai-delivered.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ display: 'inline-flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '20px', padding: '7px 16px', color: 'var(--text-dim)', fontSize: '12px', textDecoration: 'none', fontWeight: 500, transition: 'all 0.15s' }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--crimson)'; (e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--crimson)' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-dim)'; (e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--border)' }}
+                >
                   ai-delivered.com →
                 </a>
               </div>
