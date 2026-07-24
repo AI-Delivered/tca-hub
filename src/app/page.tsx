@@ -680,6 +680,19 @@ export default function Home() {
       .catch(() => {})
   }, [])
 
+  useEffect(() => {
+    let visitorId = localStorage.getItem('tca_visitor_id')
+    if (!visitorId) {
+      visitorId = crypto.randomUUID()
+      localStorage.setItem('tca_visitor_id', visitorId)
+    }
+    const payload = JSON.stringify({ path: window.location.pathname, referrer: document.referrer || null, visitorId })
+    const blob = new Blob([payload], { type: 'application/json' })
+    if (!navigator.sendBeacon('/api/track-visit', blob)) {
+      fetch('/api/track-visit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload, keepalive: true }).catch(() => {})
+    }
+  }, [])
+
   async function handleSearch(e: React.FormEvent, overrideQuery?: string) {
     e.preventDefault()
     const rawQ = (overrideQuery ?? query).trim()

@@ -4,6 +4,7 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
+  const requestStart = Date.now()
   const { query, rawQuery, history = [] } = await req.json()
   if (!query?.trim()) {
     return Response.json({ error: 'Query required' }, { status: 400 })
@@ -224,10 +225,22 @@ export async function POST(req: NextRequest) {
   const send = (obj: unknown) => encoder.encode(JSON.stringify(obj) + '\n')
 
   if (!merged?.length) {
+    const noResultsAnswer = "I couldn't find information about that on the TCA website. Try rephrasing your question or visit tcatitans.org directly."
+    const logQuery = (rawQuery ?? query).trim().slice(0, 500)
+    supabase.from('query_log').insert({
+      query: logQuery,
+      had_results: false,
+      source_count: 0,
+      top_similarity: null,
+      model: null,
+      latency_ms: Date.now() - requestStart,
+      answer_preview: noResultsAnswer,
+    }).then(() => {})
+
     const stream = new ReadableStream({
       start(controller) {
         controller.enqueue(send({ type: 'sources', sources: [] }))
-        controller.enqueue(send({ type: 'text', text: "I couldn't find information about that on the TCA website. Try rephrasing your question or visit tcatitans.org directly." }))
+        controller.enqueue(send({ type: 'text', text: noResultsAnswer }))
         controller.enqueue(send({ type: 'done' }))
         controller.close()
       }
@@ -330,9 +343,14 @@ Answer style:
 - For lists (spelling words, supply lists, etc.): reproduce them completely, don't summarize.
 - You're in a conversation — use prior context naturally. **Conversation context beats profile**: if the prior turn mentioned a specific campus or school, assume that campus for follow-up questions without clarifying.`
 
-  // Log query (fire and forget)
   const logQuery = (rawQuery ?? query).trim().slice(0, 500)
-  supabase.from('query_log').insert({ query: logQuery }).then(() => {})
+  const topSimilarity = merged.reduce((max: number, c: Chunk) => Math.max(max, c.similarity), 0)
+
+  // Escalate to Sonnet only on the harder cases — weak retrieval match (model has to
+  // synthesize/hedge across thin or conflicting sources) or a long multi-turn thread
+  // (more context to track correctly). Everything else stays on Haiku.
+  const isHardCase = topSimilarity < 0.55 || (history as unknown[]).length >= 6
+  const MODEL = isHardCase ? 'claude-sonnet-5' : 'claude-haiku-4-5-20251001'
 
   // Stream the response
   const readableStream = new ReadableStream({
@@ -340,9 +358,11 @@ Answer style:
       controller.enqueue(send({ type: 'sources', sources }))
       if (staffCard) controller.enqueue(send({ type: 'staffCard', staffCard }))
 
+      let answerText = ''
+      let usage: { input_tokens?: number; output_tokens?: number } = {}
       try {
         const stream = anthropic.messages.stream({
-          model: 'claude-haiku-4-5-20251001',
+          model: MODEL,
           max_tokens: 1024,
           system: systemPrompt,
           messages: anthropicMessages,
@@ -354,12 +374,32 @@ Answer style:
             event.delta.type === 'text_delta' &&
             event.delta.text
           ) {
+            answerText += event.delta.text
             controller.enqueue(send({ type: 'text', text: event.delta.text }))
+          }
+          if (event.type === 'message_delta' && event.usage) {
+            usage = { ...usage, output_tokens: event.usage.output_tokens }
+          }
+          if (event.type === 'message_start') {
+            usage = { ...usage, input_tokens: event.message.usage.input_tokens }
           }
         }
       } catch (e) {
         controller.enqueue(send({ type: 'error', message: String(e) }))
       }
+
+      // Log query + answer (fire and forget — never blocks the response)
+      supabase.from('query_log').insert({
+        query: logQuery,
+        had_results: true,
+        source_count: merged.length,
+        top_similarity: topSimilarity,
+        model: MODEL,
+        latency_ms: Date.now() - requestStart,
+        answer_preview: answerText.slice(0, 2000),
+        input_tokens: usage?.input_tokens ?? null,
+        output_tokens: usage?.output_tokens ?? null,
+      }).then(() => {})
 
       controller.enqueue(send({ type: 'done' }))
       controller.close()
