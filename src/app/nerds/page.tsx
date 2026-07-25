@@ -25,6 +25,7 @@ interface Stats {
   noResultCount: number
   noResultRate: number
   thinResultCount: number
+  resolvedCount: number
   avgLatency: number | null
   p95Latency: number | null
   dailyVolume: { date: string; total: number; noResults: number }[]
@@ -375,8 +376,13 @@ export default function AdminDashboard() {
             </Section>
 
             <Section title="Content gaps — where to re-scrape">
+              {stats.resolvedCount > 0 && (
+                <p style={{ color: '#5ee6a0', fontSize: 12, marginBottom: 10 }}>
+                  {stats.resolvedCount} earlier failure{stats.resolvedCount === 1 ? '' : 's'} answered correctly since — dropped from the lists below.
+                </p>
+              )}
               {stats.contentGaps.length === 0 ? (
-                <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: 13 }}>No gaps in this window — every query found a solid match.</p>
+                <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: 13 }}>Nothing outstanding — every failing question has since been answered.</p>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {stats.contentGaps.map(g => (

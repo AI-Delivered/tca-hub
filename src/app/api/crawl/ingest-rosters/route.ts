@@ -6,7 +6,15 @@ export const maxDuration = 300
 const BASE = 'https://gobound.com'
 const SOURCE_BASE = 'https://gobound.com/co/schools/theclassahs'
 const SCHOOL = 'theclassahs'
-const SEASON = '2026-27'
+// GoBound labels seasons "2026-27", running Aug–Jun. Derived rather than pinned:
+// a hardcoded season keeps scraping last year's rosters once the next one starts,
+// and does it silently — the pages return empty, which looks like the off-season.
+function currentSeason(): string {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Denver' }))
+  const start = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1
+  return `${start}-${String(start + 1).slice(2)}`
+}
+const SEASON = currentSeason()
 
 const SPORTS = [
   { name: 'Boys Football', code: 'fb', level: 'v' },

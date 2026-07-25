@@ -107,9 +107,34 @@ export async function GET(req: Request) {
   const visits = (visitData ?? []) as { created_at: string; visitor_id: string | null }[]
 
   const total = rows.length
-  const noResults = rows.filter(r => r.had_results === false)
+  const allNoResults = rows.filter(r => r.had_results === false)
   const withResults = rows.filter(r => r.had_results === true)
-  const thinResults = withResults.filter(r => (r.top_similarity ?? 1) < 0.6)
+  const allThinResults = withResults.filter(r => (r.top_similarity ?? 1) < 0.6)
+
+  // The needs-attention lists describe the CURRENT state of each question, not
+  // its history: a question is judged by its most recent run, so one that's since
+  // been fixed drops off, and one that broke again after a fix comes back.
+  // Punctuation is stripped so "Who's the principal" and "Whos the principal"
+  // count as the same question — parents retype, they don't paste.
+  const normalize = (q: string) => q.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim()
+  const latestRun = new Map<string, LogRow>()
+  for (const r of rows) {
+    const key = normalize(r.query)
+    if (!key) continue
+    const prev = latestRun.get(key)
+    if (!prev || Date.parse(r.created_at) > Date.parse(prev.created_at)) latestRun.set(key, r)
+  }
+  const stillFailing = (r: LogRow) => {
+    const latest = latestRun.get(normalize(r.query))
+    if (!latest) return true
+    return latest.had_results === false || (latest.top_similarity ?? 1) < 0.6
+  }
+
+  const noResults = allNoResults.filter(stillFailing)
+  const thinResults = allThinResults.filter(stillFailing)
+  const resolvedCount = new Set(
+    [...allNoResults, ...allThinResults].filter(r => !stillFailing(r)).map(r => normalize(r.query))
+  ).size
 
   const latencies = rows.map(r => r.latency_ms).filter((v): v is number => v != null).sort((a, b) => a - b)
   const avgLatency = latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null
@@ -161,8 +186,13 @@ export async function GET(req: Request) {
 
   // Questions that hit "no context" at least once — the direct answer to
   // "which questions are we failing on," with how often each was asked vs. failed.
+  const stillBroken = (query: string) => {
+    const latest = latestRun.get(normalize(query))
+    return !latest || latest.had_results === false || (latest.top_similarity ?? 1) < 0.6
+  }
+
   const noContextHitQueries = [...freq.values()]
-    .filter(q => q.noResultCount > 0)
+    .filter(q => q.noResultCount > 0 && stillBroken(q.query))
     .sort((a, b) => b.noResultCount - a.noResultCount || b.count - a.count)
 
   // No-context queries, most recent first, deduped by text
@@ -226,9 +256,12 @@ export async function GET(req: Request) {
   return Response.json({
     days,
     total,
-    noResultCount: noResults.length,
-    noResultRate: total ? noResults.length / total : 0,
-    thinResultCount: thinResults.length,
+    // Headline counts stay historical — they describe the window, not the to-do
+    // list. The lists below are the to-do list, and drop anything since fixed.
+    noResultCount: allNoResults.length,
+    noResultRate: total ? allNoResults.length / total : 0,
+    thinResultCount: allThinResults.length,
+    resolvedCount,
     avgLatency,
     p95Latency,
     dailyVolume,

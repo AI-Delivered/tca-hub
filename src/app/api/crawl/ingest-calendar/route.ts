@@ -106,7 +106,10 @@ export async function GET(req: NextRequest) {
   const now = new Date().toISOString()
   const today = now.slice(0, 10)
 
-  await supabase.from('page_chunks').delete().ilike('url', `${CHUNK_URL}%`)
+  // NB: the delete used to run here, before the fetch below. Any GoBound hiccup
+  // then left the athletics schedule wiped — including the "Upcoming Schedule"
+  // chunk search/route.ts anchors on — until a later run happened to succeed.
+  // Nothing is removed now until replacement events are in hand.
 
   const pages = await Promise.allSettled(
     Array.from({ length: PAGES }, (_, i) => fetchCalendarPage(addDays(today, i * 30)))
@@ -127,8 +130,11 @@ export async function GET(req: NextRequest) {
   }).sort((a, b) => a.startDateTime.localeCompare(b.startDateTime))
 
   if (!events.length) {
-    return NextResponse.json({ chunksInserted: 0, events: 0, note: 'No events parsed' })
+    // Keep whatever's already stored — stale schedule data beats none at all.
+    return NextResponse.json({ chunksInserted: 0, events: 0, note: 'No events parsed — existing chunks left in place' })
   }
+
+  await supabase.from('page_chunks').delete().ilike('url', `${CHUNK_URL}%`)
 
   let chunksInserted = 0
 

@@ -25,6 +25,11 @@ const CAMPUS_ALIASES: Array<[RegExp, string]> = [
 ]
 
 const STAFF_QUERY_RE = /principal|teacher|teaches|counsel|dean|nurse|secretar|registrar|librarian|coach|director|superintendent|paraprofessional|\bpara\b|\baide\b|specialist|psychologist|therapist|pathologist|custodian|bookkeeper|receptionist|front office|faculty|instructor|staff|who works/i
+
+// Mentioning a role isn't the same as asking who holds it. "How do I match my
+// student to a teacher" is a process question, and answering it with six
+// teachers' headshots is noise — the question has to actually be after a person.
+const PERSON_SEEKING_RE = /\bwho(s|se|m)?\b|\b(email|e-mail|contact|reach|phone)\b|\bname of\b|\bmeet the\b/i
 const LEADERSHIP_RE = /principal|dean|counsel|director|head of school|superintendent/i
 
 // The name regex used for keyword retrieval is case-insensitive, so "who is the
@@ -43,6 +48,7 @@ const STAFF_STOPWORDS = new Set([
   'her', 'they', 'how', 'get', 'reach', 'send', 'anyone', 'someone', 'which', 'school',
   'tca', 'titans', 'info', 'information', 'phone', 'number', 'looking', 'find', 'this',
   'that', 'have', 'has', 'know', 'kid', 'kids', 'child', 'student', 'grader',
+  'whos', 'whats', 'wheres', 'hows', 'here', 'new', 'current',
   // "who works at East" is a whole-directory ask, not a role — let it fall through
   // to the leadership fallback instead of matching "Social Worker"
   'work', 'works', 'working', 'worker',
@@ -436,38 +442,44 @@ export async function POST(req: NextRequest) {
     return entries
   }
 
-  let staffCards: StaffCard[] = []
-  if (personName || STAFF_QUERY_RE.test(query)) {
-    const seenCards = new Set<string>()
-    const scored: Array<{ card: StaffCard; score: number }> = []
-    const leadership: StaffCard[] = []
-
-    for (const chunk of merged) {
-      if (!chunk.url.includes('staff-directory')) continue
-      for (const entry of extractStaffEntries(chunk)) {
-        if (!entry.photo) continue // no headshot, no card
-        const key = `${entry.name.toLowerCase()}|${entry.campus}`
-        if (seenCards.has(key)) continue
-        if (wantCampus && entry.campus && entry.campus !== wantCampus) continue
-        seenCards.add(key)
-
-        let score = 0
-        if (personName && entry.name.toLowerCase().includes(personName.toLowerCase())) score += 10
-        for (const t of roleTokens) score += roleScore(entry.role, t)
-        // A named-person query shouldn't surface strangers who merely share a role word
-        if (personName && score < 10) score = 0
-
-        if (score > 0) scored.push({ card: entry, score })
-        else if (!personName && LEADERSHIP_RE.test(entry.role)) leadership.push(entry)
-      }
+  // Who deserves a face is a judgment call, and there's already something smart
+  // in this request making it: the model writing the answer. So instead of
+  // guessing from the question with keyword scores — which is what put six
+  // administrators above "I don't know who the football coach is", and Director
+  // of Bands under "who is the athletic director" — we index everyone who
+  // appears in the retrieved staff chunks, and after the answer is written we
+  // show cards for exactly the people it named, in the order it named them.
+  // Cards can no longer contradict the answer, because the answer chooses them.
+  const staffIndex = new Map<string, StaffCard>()
+  for (const chunk of merged) {
+    if (!chunk.url.includes('staff-directory')) continue
+    for (const entry of extractStaffEntries(chunk)) {
+      if (!entry.photo) continue // no headshot, no card
+      const key = entry.name.toLowerCase().replace(/\s+/g, ' ').trim()
+      const prev = staffIndex.get(key)
+      // The campus summary chunk parses to a vaguer campus than the per-category
+      // chunk, and the card reads "Role · Campus" — prefer the specific one.
+      if (!prev || (entry.campus && !prev.campus)) staffIndex.set(key, entry)
     }
+  }
 
-    // Fallback for broad asks ("who works at East Elementary") — show the faces a
-    // parent is most likely after rather than six arbitrary ones.
-    const ranked = scored.length
-      ? scored.sort((a, b) => b.score - a.score).map(s => s.card)
-      : leadership
-    staffCards = ranked.slice(0, MAX_STAFF_CARDS)
+  function cardsNamedIn(answer: string): StaffCard[] {
+    if (!answer.trim() || !staffIndex.size) return []
+    const lower = answer.toLowerCase()
+    const found: Array<{ card: StaffCard; at: number }> = []
+    for (const card of staffIndex.values()) {
+      let at = lower.indexOf(card.name.toLowerCase())
+      if (at < 0) {
+        // Answers refer to staff the way parents do — "Mrs. Heeter", no first name
+        const last = card.name.trim().split(/\s+/).pop() ?? ''
+        if (last.length > 2) {
+          const m = new RegExp(`\\b(?:mr|mrs|ms|miss|dr|coach)\\.?\\s+${last.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').exec(answer)
+          if (m) at = m.index
+        }
+      }
+      if (at >= 0) found.push({ card, at })
+    }
+    return found.sort((a, b) => a.at - b.at).slice(0, MAX_STAFF_CARDS).map(f => f.card)
   }
 
   // Strip [photo:...] markers before sending context to AI
@@ -549,7 +561,17 @@ Answer style:
   const readableStream = new ReadableStream({
     async start(controller) {
       controller.enqueue(send({ type: 'sources', sources }))
-      if (staffCards.length) controller.enqueue(send({ type: 'staffCards', staffCards }))
+
+      // Cards follow the answer as it's written: the moment the model names
+      // someone, their face appears. Re-sent only when the set actually changes.
+      let cardSignature = ''
+      const pushCards = () => {
+        const staffCards = cardsNamedIn(answerText)
+        const signature = staffCards.map(c => c.name).join('|')
+        if (signature === cardSignature) return
+        cardSignature = signature
+        if (staffCards.length) controller.enqueue(send({ type: 'staffCards', staffCards }))
+      }
 
       let answerText = ''
       let usage: { input_tokens?: number; output_tokens?: number } = {}
@@ -569,6 +591,7 @@ Answer style:
           ) {
             answerText += event.delta.text
             controller.enqueue(send({ type: 'text', text: event.delta.text }))
+            pushCards()
           }
           if (event.type === 'message_delta' && event.usage) {
             usage = { ...usage, output_tokens: event.usage.output_tokens }

@@ -6,7 +6,13 @@ export const maxDuration = 300
 const BASE = 'https://gobound.com'
 const SOURCE_BASE = 'https://gobound.com/co/schools/theclassahs'
 const SCHOOL = 'theclassahs'
-const SEASON = '2026-27'
+// Same derivation as ingest-rosters — see the note there on why this isn't pinned.
+function currentSeason(): string {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Denver' }))
+  const start = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1
+  return `${start}-${String(start + 1).slice(2)}`
+}
+const SEASON = currentSeason()
 
 const SPORTS = [
   { name: 'Boys Football', code: 'fb', level: 'v' },
