@@ -30,23 +30,51 @@ export async function POST(req: NextRequest) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   const supabase = getSupabaseAdmin()
 
-  // Pull all resource-manager URLs referenced in indexed content
-  const { data: rows } = await supabase
-    .from('page_chunks')
-    .select('content')
-    .ilike('content', '%resource-manager/view/%')
+  // Discovery re-fetches the indexed pages and reads the document links out of
+  // their HTML. It used to grep indexed chunk *text* for resource-manager URLs,
+  // but the crawler stores plain text with hrefs stripped — so it matched nothing
+  // on every run and no new PDF had been picked up since the corpus was seeded by
+  // scripts/run-ingest-pdfs.mjs. Newsletters and supply lists are posted this way,
+  // so silently discovering zero is the difference between having them and not.
+  const MAX_PAGES = 150
+  const FETCH_CONCURRENCY = 8
 
-  const urlSet = new Set<string>()
-  for (const row of rows ?? []) {
-    const matches = row.content.match(/https:\/\/www\.tcatitans\.org\/fs\/resource-manager\/view\/[a-f0-9-]+/g) ?? []
-    matches.forEach((u: string) => urlSet.add(u))
+  const { data: pageRows } = await supabase
+    .from('page_chunks')
+    .select('url')
+    .ilike('url', 'https://www.tcatitans.org/%')
+    .limit(2000)
+  const pages = [...new Set((pageRows ?? []).map(r => r.url.split('#')[0]))]
+    .filter(u => !u.includes('/fs/resource-manager/'))
+    .slice(0, MAX_PAGES)
+
+  // url -> the link's anchor text, which is what the document is actually called
+  // ("2026-27 Supply List") as opposed to the UUID in its URL.
+  const discovered = new Map<string, string>()
+  const linkRe = /<a[^>]+href=["']([^"']*\/fs\/resource-manager\/view\/[a-f0-9-]+)["'][^>]*>([\s\S]*?)<\/a>/gi
+  for (let i = 0; i < pages.length; i += FETCH_CONCURRENCY) {
+    await Promise.all(pages.slice(i, i + FETCH_CONCURRENCY).map(async page => {
+      try {
+        const res = await fetch(page, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; TCAHub/1.0)' },
+          signal: AbortSignal.timeout(10000),
+        })
+        if (!res.ok) return
+        const html = await res.text()
+        for (const m of html.matchAll(linkRe)) {
+          const href = m[1].startsWith('http') ? m[1] : `https://www.tcatitans.org${m[1]}`
+          const text = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120)
+          if (!discovered.get(href)) discovered.set(href, text)
+        }
+      } catch { /* page unavailable this run — the next one will catch it */ }
+    }))
   }
 
   // Get already-indexed URLs to skip
   const { data: indexedRows } = await supabase.from('page_chunks').select('url').ilike('url', '%resource-manager%')
   const indexedUrls = new Set((indexedRows ?? []).map(r => r.url))
 
-  const urls = [...urlSet].filter(u => !indexedUrls.has(u)).slice(0, 20)
+  const urls = [...discovered.keys()].filter(u => !indexedUrls.has(u)).slice(0, 20)
   let indexed = 0, skipped = 0, errors = 0
 
   for (const url of urls) {

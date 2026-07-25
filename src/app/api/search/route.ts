@@ -574,6 +574,7 @@ Answer style:
       }
 
       let answerText = ''
+      let failure = ''
       let usage: { input_tokens?: number; output_tokens?: number } = {}
       try {
         const stream = anthropic.messages.stream({
@@ -601,16 +602,31 @@ Answer style:
           }
         }
       } catch (e) {
-        controller.enqueue(send({ type: 'error', message: String(e) }))
+        // A parent should never see an API error, and definitely never a billing
+        // one — this used to surface "Your credit balance is too low to access
+        // the Anthropic API" verbatim in the answer card. Retrieval already
+        // succeeded, so fall back to handing them the pages it found.
+        failure = String(e)
+        console.error('answer generation failed:', failure)
+        const fallback = sources.length
+          ? "I can't write an answer right now — the assistant is temporarily unavailable. The pages below should have what you're looking for."
+          : "I can't answer right now — the assistant is temporarily unavailable. Please try again in a few minutes, or visit [tcatitans.org](https://www.tcatitans.org)."
+        if (!answerText) {
+          answerText = fallback
+          controller.enqueue(send({ type: 'text', text: fallback }))
+        }
+        controller.enqueue(send({ type: 'error', message: 'assistant unavailable' }))
       }
 
-      // Log query + answer (fire and forget — never blocks the response)
+      // Log query + answer (fire and forget — never blocks the response).
+      // A failed generation is logged as its own model so an outage shows up on
+      // the dashboard instead of looking like a normal answer.
       supabase.from('query_log').insert({
         query: logQuery,
         had_results: true,
         source_count: merged.length,
         top_similarity: topSimilarity,
-        model: MODEL,
+        model: failure ? `${MODEL}-failed` : MODEL,
         latency_ms: Date.now() - requestStart,
         answer_preview: answerText.slice(0, 2000),
         input_tokens: usage?.input_tokens ?? null,

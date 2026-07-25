@@ -775,7 +775,11 @@ export default function Home() {
               finalAnswer += event.text
               setStreamingAnswer(prev => prev + event.text)
             } else if (event.type === 'error') {
-              setError(event.message ?? 'Something went wrong')
+              // The server sends a sanitized reason; never render a raw API
+              // message to a parent regardless of what arrives here.
+              setError(event.message === 'assistant unavailable'
+                ? 'The assistant is temporarily unavailable — the sources above should still help.'
+                : 'Something went wrong. Please try again.')
             }
           } catch { /* ignore malformed lines */ }
         }
