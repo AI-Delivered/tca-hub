@@ -71,20 +71,47 @@ interface Exchange {
   staffCards?: StaffCardData[]
 }
 
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (!parts.length) return '?'
+  const first = parts[0][0] ?? ''
+  const last = parts.length > 1 ? parts[parts.length - 1][0] : ''
+  return (first + last).toUpperCase()
+}
+
 function StaffCard({ card, compact }: { card: StaffCardData; compact: boolean }) {
   const size = compact ? '56px' : '72px'
+  // ~12% of the directory has a placeholder image instead of a headshot — the
+  // High School principal among them. A monogram keeps the card (role, campus,
+  // email) rather than making those people disappear from results.
+  const [imageBroken, setImageBroken] = useState(false)
+  const showPhoto = Boolean(card.photo) && !imageBroken
   return (
     <div data-staff-card style={{
       display: 'flex', alignItems: 'center', gap: compact ? '12px' : '14px',
       background: 'var(--surface)', border: '1px solid var(--border)',
       borderRadius: '14px', padding: '14px 16px',
     }}>
-      <img
-        src={card.photo}
-        alt={card.name}
-        style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, background: 'var(--border)' }}
-        onError={e => { (e.target as HTMLImageElement).closest('[data-staff-card]')?.remove() }}
-      />
+      {showPhoto ? (
+        <img
+          src={card.photo}
+          alt={card.name}
+          style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, background: 'var(--border)' }}
+          onError={() => setImageBroken(true)}
+        />
+      ) : (
+        <div
+          aria-hidden="true"
+          style={{
+            width: size, height: size, borderRadius: '50%', flexShrink: 0,
+            background: 'var(--border)', color: 'var(--navy)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: compact ? '18px' : '23px', fontWeight: 700, letterSpacing: '0.02em',
+          }}
+        >
+          {initials(card.name)}
+        </div>
+      )}
       <div style={{ minWidth: 0 }}>
         <p style={{ fontSize: compact ? '14px' : '15px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1px' }}>{card.name}</p>
         <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '4px' }}>{card.role} · {card.campus}</p>
@@ -98,16 +125,15 @@ function StaffCard({ card, compact }: { card: StaffCardData; compact: boolean })
 
 // One card gets the full width; several tile into a responsive grid.
 function StaffCards({ cards }: { cards: StaffCardData[] }) {
-  const withPhotos = cards.filter(c => c.photo)
-  if (!withPhotos.length) return null
-  const compact = withPhotos.length > 1
+  if (!cards.length) return null
+  const compact = cards.length > 1
   return (
     <div style={{
       display: 'grid',
       gridTemplateColumns: compact ? 'repeat(auto-fit, minmax(230px, 1fr))' : '1fr',
       gap: '8px', marginBottom: '10px',
     }}>
-      {withPhotos.map(card => (
+      {cards.map(card => (
         <StaffCard key={`${card.name}|${card.campus}`} card={card} compact={compact} />
       ))}
     </div>

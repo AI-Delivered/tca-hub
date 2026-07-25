@@ -499,7 +499,10 @@ export async function POST(req: NextRequest) {
   for (const chunk of merged) {
     if (!chunk.url.includes('staff-directory')) continue
     for (const entry of extractStaffEntries(chunk)) {
-      if (!entry.photo) continue // no headshot, no card
+      // Staff without a headshot are indexed too — about 12% of the directory
+      // has a placeholder image rather than a photo, including the High School
+      // principal. The card still carries their role, campus and email, so the
+      // UI shows a monogram instead of dropping the person entirely.
       const key = entry.name.toLowerCase().replace(/\s+/g, ' ').trim()
       const prev = staffIndex.get(key)
       // The campus summary chunk parses to a vaguer campus than the per-category

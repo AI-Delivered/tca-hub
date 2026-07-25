@@ -56,8 +56,11 @@ const UNIVERSAL = [
     },
   },
   {
-    name: 'every card has a photo',
-    check: r => r.cards.every(c => c.photo) || 'card without a photo URL',
+    // Photos are optional — ~12% of the directory has a placeholder rather than
+    // a headshot, and those people still get a card with a monogram. What every
+    // card must have is a name and a role.
+    name: 'every card has a name and role',
+    check: r => r.cards.every(c => c.name?.trim() && c.role?.trim()) || 'card missing name or role',
   },
   {
     name: 'no calendar sources from a past school year',
