@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
   const nowYear = now.getFullYear()
   const nowMonth = now.getMonth()
   const schoolYearLabel = `${schoolYearStart(now)}-${String(schoolYearStart(now) + 1).slice(2)}`
-  const { query, rawQuery, history = [] } = await req.json()
+  const { query, rawQuery, history = [], debug = false } = await req.json()
   if (!query?.trim()) {
     return Response.json({ error: 'Query required' }, { status: 400 })
   }
@@ -482,12 +482,83 @@ export async function POST(req: NextRequest) {
     return found.sort((a, b) => a.at - b.at).slice(0, MAX_STAFF_CARDS).map(f => f.card)
   }
 
-  // Strip [photo:...] markers before sending context to AI
-  const context = merged
-    .map((c: { title: string; url: string; content: string }, i: number) =>
-      `[Source ${i + 1}: ${c.title} (${c.url})]\n${c.content.replace(/\s*\[photo:[^\]]+\]/g, '')}`
-    )
-    .join('\n\n---\n\n')
+  // Context budget. Questions were averaging 21k input tokens because whole
+  // chunks went to the model untouched — the GoBound "Upcoming" chunk alone is
+  // ~78k characters of every practice for every team, so any sports question
+  // paid ~21k tokens for it before a word was written. Chunks are now trimmed to
+  // the part that can actually answer the question: the named sport, upcoming
+  // dates rather than ones already past, and the lines that share words with the
+  // question. scripts/measure-context.mjs asserts the answer-bearing facts
+  // survive each trim, which is what keeps this from quietly degrading answers.
+  const CONTEXT_CHAR_BUDGET = 30_000
+  const CHUNK_CHAR_CAP = 5_000
+  const MONTHS_SHORT = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+
+  // "[Football JH B (Boys)] Thu, Jul 23, 2026, 7:00 PM: …"
+  function lineDate(line: string): Date | null {
+    const m = line.match(/\b([A-Z][a-z]{2})[a-z]*\s+(\d{1,2}),\s*(20\d{2})\b/)
+    if (!m) return null
+    const mi = MONTHS_SHORT.indexOf(m[1].toLowerCase())
+    if (mi < 0) return null
+    return new Date(Number(m[3]), mi, Number(m[2]))
+  }
+
+  const contextTerms = query.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+    .filter((t: string) => t.length > 2 && !STAFF_STOPWORDS.has(t))
+
+  function trimChunk(content: string, cap: number): string {
+    const clean = content.replace(/\s*\[photo:[^\]]+\]/g, '')
+    if (clean.length <= cap) return clean
+
+    const lines = clean.split('\n')
+    const header = lines[0] ?? ''
+    let body = lines.slice(1)
+
+    // A question about one sport doesn't need every other team's practices
+    if (matchedSport) {
+      const sportLines = body.filter(l => hasTerm(l, matchedSport))
+      if (sportLines.length) body = sportLines
+    }
+
+    // Yesterday's practice can't be the answer to "when is the next game"
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
+    const upcoming = body.filter(l => {
+      const d = lineDate(l)
+      return !d || d >= yesterday
+    })
+    if (upcoming.length) body = upcoming
+
+    let out = [header, ...body].join('\n')
+    if (out.length <= cap) return out
+
+    // Still too big: keep the lines that share words with the question, in order
+    const scored = body.map((line, i) => {
+      const l = line.toLowerCase()
+      return { i, line, score: contextTerms.reduce((s: number, t: string) => s + (l.includes(t) ? 1 : 0), 0) }
+    })
+    const keep = scored.slice().sort((a, b) => b.score - a.score || a.i - b.i)
+    const chosen: typeof keep = []
+    let used = header.length
+    for (const s of keep) {
+      if (used + s.line.length + 1 > cap) continue
+      chosen.push(s)
+      used += s.line.length + 1
+    }
+    chosen.sort((a, b) => a.i - b.i)
+    out = [header, ...chosen.map(c => c.line)].join('\n')
+    if (chosen.length < body.length) out += `\n… (${body.length - chosen.length} more entries not shown)`
+    return out
+  }
+
+  const contextParts: string[] = []
+  let budgetLeft = CONTEXT_CHAR_BUDGET
+  for (const [i, c] of merged.entries()) {
+    if (budgetLeft <= 0) break
+    const trimmed = trimChunk(c.content, Math.min(CHUNK_CHAR_CAP, budgetLeft))
+    budgetLeft -= trimmed.length
+    contextParts.push(`[Source ${i + 1}: ${c.title} (${c.url})]\n${trimmed}`)
+  }
+  const context = contextParts.join('\n\n---\n\n')
 
   // Sources (filtered by similarity)
   const seen = new Set<string>()
@@ -500,6 +571,26 @@ export async function POST(req: NextRequest) {
     })
     .slice(0, 4)
     .map((c: { url: string; title: string }) => ({ url: c.url, title: c.title }))
+
+  // Inspect what a question would cost and what it would be answered from,
+  // without spending a single answer token. Secret-gated; used by
+  // scripts/measure-context.mjs to prove a context trim didn't drop the facts.
+  if (debug && req.headers.get('x-crawl-secret') === process.env.CRAWL_SECRET) {
+    const chars = context.length
+    return Response.json({
+      query,
+      chunkCount: merged.length,
+      contextChars: chars,
+      estInputTokens: Math.round(chars / 3.7) + 1400, // ≈ context + system prompt
+      chunks: merged.map((c: Chunk) => ({
+        title: c.title,
+        url: c.url,
+        similarity: Number(c.similarity?.toFixed(3) ?? 0),
+        chars: c.content.length,
+      })),
+      context,
+    })
+  }
 
   // Build conversation messages for Anthropic
   // Prior turns: clean query + answer text (no context injection)
