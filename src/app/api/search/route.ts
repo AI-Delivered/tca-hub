@@ -3,6 +3,71 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 
 export const maxDuration = 60
 
+// Parents don't speak the website's dialect: they say "middle school" where every
+// chunk says "Junior High", so the embedding has nothing to latch onto and the
+// wrong campus comes back. Append the site's own wording before embedding.
+const SYNONYM_EXPANSIONS: Array<[RegExp, string]> = [
+  [/middle school|\bjh\b|(7th|8th|seventh|eighth)\s+grade/i, 'Junior High'],
+  [/\bhs\b|freshman|sophomore|(9th|10th|11th|12th)\s+grade/i, 'High School'],
+  [/\bcp\b/i, 'College Pathways'],
+]
+
+// Campus named in a query. Junior High is tested before High School so
+// "junior high school" doesn't land on HS.
+const CAMPUS_ALIASES: Array<[RegExp, string]> = [
+  [/junior high|middle school|\bjh\b|(7th|8th|seventh|eighth) grade/i, 'Junior High'],
+  [/college pathways|\bcp\b/i, 'College Pathways'],
+  [/cottage/i, 'Cottage School'],
+  [/high school|\bhs\b|freshman|sophomore|(9th|10th|11th|12th) grade/i, 'High School'],
+  [/\beast\b/i, 'East Elementary'],
+  [/\bcentral\b/i, 'Central Elementary'],
+  [/\bnorth\b/i, 'North Elementary'],
+]
+
+const STAFF_QUERY_RE = /principal|teacher|teaches|counsel|dean|nurse|secretar|registrar|librarian|coach|director|superintendent|paraprofessional|\bpara\b|\baide\b|specialist|psychologist|therapist|pathologist|custodian|bookkeeper|receptionist|front office|faculty|instructor|staff|who works/i
+const LEADERSHIP_RE = /principal|dean|counsel|director|head of school|superintendent/i
+
+// The name regex used for keyword retrieval is case-insensitive, so "who is the
+// principal at East" captures "the principal at East" — a role question wearing a
+// name's clothes. Only treat a capture as a person when it holds no role or campus
+// words, otherwise the role path never gets a chance to run.
+const NON_NAME_RE = /\b(principal|teacher|teaches|counsel\w*|dean|nurse|secretar\w*|registrar|librarian|coach|director|superintendent|para\w*|aide|specialist|psychologist|therapist|pathologist|custodian|bookkeeper|receptionist|office|faculty|instructor|staff|school|elementary|junior|middle|high|college|pathways|cottage|east|central|north|grade|kinder\w*|the|my|our|an?)\b/i
+
+// Words that identify a campus rather than a role — they gate which staff cards
+// are eligible, so they must not also score them.
+const CAMPUS_WORDS = new Set(['east', 'central', 'north', 'elementary', 'junior', 'high', 'middle', 'jh', 'hs', 'cp', 'college', 'pathways', 'cottage', 'campus'])
+const STAFF_STOPWORDS = new Set([
+  'who', 'is', 'are', 'the', 'a', 'an', 'at', 'for', 'of', 'in', 'to', 'my', 'me', 'i',
+  'what', 'whats', 'email', 'contact', 'address', 'name', 'tell', 'about', 'can', 'you',
+  'give', 'list', 'please', 'need', 'and', 'with', 'does', 'do', 'their', 'there', 'his',
+  'her', 'they', 'how', 'get', 'reach', 'send', 'anyone', 'someone', 'which', 'school',
+  'tca', 'titans', 'info', 'information', 'phone', 'number', 'looking', 'find', 'this',
+  'that', 'have', 'has', 'know', 'kid', 'kids', 'child', 'student', 'grader',
+  // "who works at East" is a whole-directory ask, not a role — let it fall through
+  // to the leadership fallback instead of matching "Social Worker"
+  'work', 'works', 'working', 'worker',
+])
+const ORDINALS: Record<string, string> = {
+  kindergarten: 'kinder', first: '1st', second: '2nd', third: '3rd', fourth: '4th',
+  fifth: '5th', sixth: '6th', seventh: '7th', eighth: '8th',
+}
+
+// "teachers" and "teaches" both need to hit the role "5th Grade Teacher"
+function stem(token: string): string {
+  if (token.length > 4 && token.endsWith('es')) return token.slice(0, -2)
+  if (token.length > 3 && token.endsWith('s')) return token.slice(0, -1)
+  return token
+}
+
+// Score, not a boolean: "Principal" should outrank "Assistant Principal" when the
+// query asks for the principal.
+function roleScore(role: string, token: string): number {
+  const r = role.toLowerCase()
+  const s = stem(token)
+  if (!r.includes(token) && !r.includes(s)) return 0
+  return r.startsWith(token) || r.startsWith(s) ? 1.5 : 1
+}
+
 export async function POST(req: NextRequest) {
   const requestStart = Date.now()
   const { query, rawQuery, history = [] } = await req.json()
@@ -21,7 +86,9 @@ export async function POST(req: NextRequest) {
 
   // Augment retrieval query with last user turn so follow-up questions inherit context
   const lastUserMsg = (history as { role: string; content: string }[]).filter(m => m.role === 'user').slice(-1)[0]?.content ?? ''
-  const retrievalQuery = lastUserMsg ? `${lastUserMsg} ${query}` : query
+  const baseQuery = lastUserMsg ? `${lastUserMsg} ${query}` : query
+  const expansions = SYNONYM_EXPANSIONS.filter(([re]) => re.test(baseQuery)).map(([, term]) => term)
+  const retrievalQuery = expansions.length ? `${baseQuery} ${expansions.join(' ')}` : baseQuery
   const embeddingRes = await voyage.embed({ input: [retrievalQuery.slice(0, 16000)], model: 'voyage-3-lite' })
   const queryEmbedding = embeddingRes.data![0].embedding!
 
@@ -92,6 +159,35 @@ export async function POST(req: NextRequest) {
         .slice(0, 8)
       keywordChunks = fuzzyMatches
     }
+  }
+
+  // Staff question about a named campus — resolved here rather than left to the
+  // embedding. Every campus has near-identical "<Campus> — <Category>" chunks
+  // competing for the top-16 slots, so "who's the middle school principal" can
+  // come back with Central Elementary's leadership and nothing from JH.
+  const rawName = nameMatch?.[1]?.trim() ?? ''
+  const personName = rawName && !NON_NAME_RE.test(rawName) ? rawName : null
+  const wantCampus = CAMPUS_ALIASES.find(([re]) => re.test(query))?.[1] ?? null
+  const roleTokens: string[] = query
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .map((t: string) => ORDINALS[t] ?? t)
+    .filter((t: string) => t.length > 1 && !STAFF_STOPWORDS.has(t) && !CAMPUS_WORDS.has(t))
+
+  if (!personName && wantCampus && STAFF_QUERY_RE.test(query)) {
+    // Pull the campus chunks that actually mention the role asked about; fall back
+    // to that campus's leadership for broad "who works at X" asks.
+    const roleAnchor = roleTokens.find(t => t.length > 2)
+    const anchorQuery = supabase
+      .from('page_chunks')
+      .select('url, title, content')
+      .ilike('url', '%staff-directory%')
+      .ilike('title', `${wantCampus} — %`)
+    const { data: campusRows } = roleAnchor
+      ? await anchorQuery.ilike('content', `%${stem(roleAnchor)}%`).limit(4)
+      : await anchorQuery.ilike('title', '%Leadership%').limit(2)
+    keywordChunks = [...keywordChunks, ...(campusRows ?? []).map(c => ({ ...c, similarity: 0.7 }))]
   }
 
   // Calendar keyword fallback: specific event names (literacy testing, picture day, etc.)
@@ -175,17 +271,37 @@ export async function POST(req: NextRequest) {
   const isSportsQuery = !daysOffQuery && sportTerms.some(t => query.toLowerCase().includes(t))
   const calTermMatch = !daysOffQuery && calEventTerms.find(t => query.toLowerCase().includes(t))
 
+  // Named sports only (excludes generic words like "game"/"practice"/"tournament") — used to
+  // anchor the specific per-team chunk by title. There are 60+ near-identically-worded
+  // "TCA Athletics — <Sport> <Level> (<Gender>)" chunks competing for the vector search's
+  // top-16 slots, so whether e.g. "Boys Track & Field Junior High" makes the cut for a plain
+  // "when does track start" query is essentially a coin flip — the same query can surface it
+  // one run and miss it the next. Anchor it by keyword the same way the Upcoming chunk is
+  // anchored, instead of leaving it to embedding-ranking luck.
+  const sportNames = [
+    'football', 'basketball', 'soccer', 'volleyball', 'baseball', 'softball',
+    'track', 'swim', 'cross country', 'wrestling', 'lacrosse', 'tennis', 'golf', 'cheer', 'dance',
+  ]
+  const matchedSport = sportNames.find(t => query.toLowerCase().includes(t))
+
   if (isSportsQuery) {
     // Always anchor sports queries with the GoBound upcoming chunk — it's the authoritative
     // aggregated view of all TCA athletics for the next 30 days with exact times.
     // Give it the highest priority so it wins over TeamReach or sport-specific chunks.
     // Fetch both GoBound upcoming chunks by exact title — avoids # encoding issues in ILIKE
-    const [{ data: gbUpcoming }, { data: gbSchedule }] = await Promise.all([
+    const [{ data: gbUpcoming }, { data: gbSchedule }, sportChunks] = await Promise.all([
       supabase.from('page_chunks').select('url, title, content').eq('title', 'TCA Athletics — Upcoming').limit(1),
       supabase.from('page_chunks').select('url, title, content').eq('title', 'TCA Athletics & Activities — Upcoming Schedule').limit(1),
+      matchedSport
+        ? supabase.from('page_chunks').select('url, title, content').ilike('title', 'TCA Athletics%').ilike('title', `%${matchedSport}%`).limit(20)
+        : Promise.resolve({ data: [] }),
     ])
     const gbChunks = [...(gbUpcoming ?? []), ...(gbSchedule ?? [])].map(c => ({ ...c, similarity: 0.90 }))
-    keywordChunks = [...gbChunks, ...keywordChunks]
+    // Below the Upcoming anchor's 0.90 (so the 30-day view still wins on recency) but above
+    // the 0.50 source-display threshold, so the sport-specific chunk always makes it into
+    // context and is cited as a source.
+    const sportSpecificChunks = (sportChunks.data ?? []).map(c => ({ ...c, similarity: 0.82 }))
+    keywordChunks = [...gbChunks, ...sportSpecificChunks, ...keywordChunks]
   }
 
   if (calTermMatch && !isSportsQuery) {
@@ -248,33 +364,71 @@ export async function POST(req: NextRequest) {
     return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } })
   }
 
-  // Extract a staff card if the query is about a specific person.
-  // Collect ALL matching person lines across all chunks, then only show the card
-  // when there's exactly one unique person match (avoid showing the wrong Pollard, etc.)
-  let staffCard: { name: string; role: string; email: string; photo: string; campus: string } | null = null
-  const personName = nameMatch?.[1]?.trim() ?? null
-  if (personName) {
-    type CardCandidate = { name: string; role: string; email: string; photo: string; campus: string }
-    const candidates: CardCandidate[] = []
-    const seenNames = new Set<string>()
-    for (const chunk of merged) {
-      const titleLine = chunk.content.split('\n')[0] ?? ''
-      const campusName = titleLine.split(' — ')[0].trim()
-      for (const line of chunk.content.split('\n')) {
-        const photoMatch = line.match(/\[photo:([^\]]+)\]/)
-        const stripped = line.replace(/\s*\[photo:[^\]]+\]/g, '').trim()
-        const lineMatch = stripped.match(/^(.+?):\s+(.+?)\s+—\s+([\w.]+@tcatitans\.org)$/)
-        if (lineMatch && stripped.toLowerCase().includes(personName.toLowerCase())) {
-          const fullName = lineMatch[2].trim()
-          if (!seenNames.has(fullName)) {
-            seenNames.add(fullName)
-            candidates.push({ name: fullName, role: lineMatch[1].trim(), email: lineMatch[3].trim(), photo: photoMatch?.[1] ?? '', campus: campusName })
-          }
-        }
+  // Staff photo cards — shown for any staff question, not just "who is <Name>".
+  // Three shapes are handled: a specific person ("who is Mr. Walters"), a role
+  // ("who's the principal at East"), and a group ("5th grade teachers at North").
+  // Capped so a whole grade level doesn't bury the answer.
+  const MAX_STAFF_CARDS = 6
+  type StaffCard = { name: string; role: string; email: string; photo: string; campus: string }
+
+  // Both staff chunk shapes: per-category lines ("Role: Name — email [photo:url]")
+  // and the campus summary chunk ("Role: Name (email) [photo:url], Name2 (...)").
+  function extractStaffEntries(chunk: Chunk): StaffCard[] {
+    const lines = chunk.content.split('\n')
+    const campus = (lines[0] ?? '').split('—')[0].replace(/staff directory/i, '').replace(/[:\s]+$/, '').trim()
+    const entries: StaffCard[] = []
+    for (const line of lines.slice(1)) {
+      const colon = line.indexOf(':')
+      if (colon < 1) continue
+      const role = line.slice(0, colon).trim()
+      const rest = line.slice(colon + 1)
+      if (!role || role.startsWith('(')) continue
+
+      const single = rest.match(/^\s*(.+?)\s+—\s+([\w.]*@tcatitans\.org)\s*(?:\[photo:([^\]]+)\])?\s*$/)
+      if (single) {
+        entries.push({ name: single[1].trim(), role, email: single[2], photo: single[3] ?? '', campus })
+        continue
+      }
+      for (const m of rest.matchAll(/([^,()]+?)\s+\(([\w.]*@tcatitans\.org|)\)\s*(?:\[photo:([^\]]+)\])?/g)) {
+        const name = m[1].trim()
+        if (name) entries.push({ name, role, email: m[2] ?? '', photo: m[3] ?? '', campus })
       }
     }
-    // Only show a card when exactly one person matched — multiple matches means ambiguous
-    if (candidates.length === 1) staffCard = candidates[0]
+    return entries
+  }
+
+  let staffCards: StaffCard[] = []
+  if (personName || STAFF_QUERY_RE.test(query)) {
+    const seenCards = new Set<string>()
+    const scored: Array<{ card: StaffCard; score: number }> = []
+    const leadership: StaffCard[] = []
+
+    for (const chunk of merged) {
+      if (!chunk.url.includes('staff-directory')) continue
+      for (const entry of extractStaffEntries(chunk)) {
+        if (!entry.photo) continue // no headshot, no card
+        const key = `${entry.name.toLowerCase()}|${entry.campus}`
+        if (seenCards.has(key)) continue
+        if (wantCampus && entry.campus && entry.campus !== wantCampus) continue
+        seenCards.add(key)
+
+        let score = 0
+        if (personName && entry.name.toLowerCase().includes(personName.toLowerCase())) score += 10
+        for (const t of roleTokens) score += roleScore(entry.role, t)
+        // A named-person query shouldn't surface strangers who merely share a role word
+        if (personName && score < 10) score = 0
+
+        if (score > 0) scored.push({ card: entry, score })
+        else if (!personName && LEADERSHIP_RE.test(entry.role)) leadership.push(entry)
+      }
+    }
+
+    // Fallback for broad asks ("who works at East Elementary") — show the faces a
+    // parent is most likely after rather than six arbitrary ones.
+    const ranked = scored.length
+      ? scored.sort((a, b) => b.score - a.score).map(s => s.card)
+      : leadership
+    staffCards = ranked.slice(0, MAX_STAFF_CARDS)
   }
 
   // Strip [photo:...] markers before sending context to AI
@@ -356,7 +510,7 @@ Answer style:
   const readableStream = new ReadableStream({
     async start(controller) {
       controller.enqueue(send({ type: 'sources', sources }))
-      if (staffCard) controller.enqueue(send({ type: 'staffCard', staffCard }))
+      if (staffCards.length) controller.enqueue(send({ type: 'staffCards', staffCards }))
 
       let answerText = ''
       let usage: { input_tokens?: number; output_tokens?: number } = {}

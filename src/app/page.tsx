@@ -68,28 +68,48 @@ interface Exchange {
   query: string
   answer: string
   sources: Source[]
-  staffCard?: StaffCardData
+  staffCards?: StaffCardData[]
 }
 
-function StaffCard({ card }: { card: StaffCardData }) {
-  if (!card.photo) return null
+function StaffCard({ card, compact }: { card: StaffCardData; compact: boolean }) {
+  const size = compact ? '56px' : '72px'
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: '14px',
+    <div data-staff-card style={{
+      display: 'flex', alignItems: 'center', gap: compact ? '12px' : '14px',
       background: 'var(--surface)', border: '1px solid var(--border)',
-      borderRadius: '14px', padding: '14px 16px', marginBottom: '10px',
+      borderRadius: '14px', padding: '14px 16px',
     }}>
       <img
         src={card.photo}
         alt={card.name}
-        style={{ width: '72px', height: '72px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0, background: 'var(--border)' }}
+        style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, background: 'var(--border)' }}
         onError={e => { (e.target as HTMLImageElement).closest('[data-staff-card]')?.remove() }}
       />
       <div style={{ minWidth: 0 }}>
-        <p style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1px' }}>{card.name}</p>
+        <p style={{ fontSize: compact ? '14px' : '15px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1px' }}>{card.name}</p>
         <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '4px' }}>{card.role} · {card.campus}</p>
-        <a href={`mailto:${card.email}`} style={{ fontSize: '12px', color: 'var(--crimson)', textDecoration: 'none', fontWeight: 500 }}>{card.email}</a>
+        {card.email && (
+          <a href={`mailto:${card.email}`} style={{ fontSize: '12px', color: 'var(--crimson)', textDecoration: 'none', fontWeight: 500 }}>{card.email}</a>
+        )}
       </div>
+    </div>
+  )
+}
+
+// One card gets the full width; several tile into a responsive grid.
+function StaffCards({ cards }: { cards: StaffCardData[] }) {
+  const withPhotos = cards.filter(c => c.photo)
+  if (!withPhotos.length) return null
+  const compact = withPhotos.length > 1
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: compact ? 'repeat(auto-fit, minmax(230px, 1fr))' : '1fr',
+      gap: '8px', marginBottom: '10px',
+    }}>
+      {withPhotos.map(card => (
+        <StaffCard key={`${card.name}|${card.campus}`} card={card} compact={compact} />
+      ))}
     </div>
   )
 }
@@ -646,7 +666,7 @@ export default function Home() {
   const [exchanges, setExchanges] = useState<Exchange[]>([])
   const [streamingAnswer, setStreamingAnswer] = useState('')
   const [streamingSources, setStreamingSources] = useState<Source[]>([])
-  const [streamingStaffCard, setStreamingStaffCard] = useState<StaffCardData | null>(null)
+  const [streamingStaffCards, setStreamingStaffCards] = useState<StaffCardData[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [isFocused, setIsFocused] = useState(false)
@@ -706,7 +726,7 @@ export default function Home() {
     setError('')
     setStreamingAnswer('')
     setStreamingSources([])
-    setStreamingStaffCard(null)
+    setStreamingStaffCards([])
 
     // Build conversation history from prior exchanges (clean text, no context prefix)
     const history = exchanges.flatMap(ex => [
@@ -731,7 +751,7 @@ export default function Home() {
       let buffer = ''
       let finalAnswer = ''
       let finalSources: Source[] = []
-      let finalStaffCard: StaffCardData | null = null
+      let finalStaffCards: StaffCardData[] = []
 
       while (true) {
         const { done, value } = await reader.read()
@@ -744,13 +764,13 @@ export default function Home() {
         for (const line of lines) {
           if (!line.trim()) continue
           try {
-            const event = JSON.parse(line) as { type: string; sources?: Source[]; text?: string; message?: string; staffCard?: StaffCardData }
+            const event = JSON.parse(line) as { type: string; sources?: Source[]; text?: string; message?: string; staffCards?: StaffCardData[] }
             if (event.type === 'sources' && event.sources) {
               finalSources = event.sources
               setStreamingSources(event.sources)
-            } else if (event.type === 'staffCard' && event.staffCard) {
-              finalStaffCard = event.staffCard
-              setStreamingStaffCard(event.staffCard)
+            } else if (event.type === 'staffCards' && event.staffCards) {
+              finalStaffCards = event.staffCards
+              setStreamingStaffCards(event.staffCards)
             } else if (event.type === 'text' && event.text) {
               finalAnswer += event.text
               setStreamingAnswer(prev => prev + event.text)
@@ -762,11 +782,11 @@ export default function Home() {
       }
 
       if (finalAnswer) {
-        setExchanges(prev => [...prev, { query: rawQ, answer: finalAnswer, sources: finalSources, staffCard: finalStaffCard ?? undefined }])
+        setExchanges(prev => [...prev, { query: rawQ, answer: finalAnswer, sources: finalSources, staffCards: finalStaffCards.length ? finalStaffCards : undefined }])
       }
       setStreamingAnswer('')
       setStreamingSources([])
-      setStreamingStaffCard(null)
+      setStreamingStaffCards([])
       setQuery('')
 
       setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 80)
@@ -796,7 +816,7 @@ export default function Home() {
     setExchanges([])
     setStreamingAnswer('')
     setStreamingSources([])
-    setStreamingStaffCard(null)
+    setStreamingStaffCards([])
     setQuery('')
     setError('')
     setLoading(false)
@@ -962,7 +982,7 @@ export default function Home() {
             {/* Active streaming exchange — always at top */}
             {(loading || streamingAnswer) && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {streamingStaffCard && <StaffCard card={streamingStaffCard} />}
+                {streamingStaffCards.length > 0 && <StaffCards cards={streamingStaffCards} />}
                 <AnswerCard
                   answer={streamingAnswer}
                   sources={streamingSources}
@@ -982,7 +1002,7 @@ export default function Home() {
                       "{ex.query}"
                     </p>
                   )}
-                  {ex.staffCard && <StaffCard card={ex.staffCard} />}
+                  {ex.staffCards && <StaffCards cards={ex.staffCards} />}
                   <AnswerCard
                     answer={ex.answer}
                     sources={ex.sources}
