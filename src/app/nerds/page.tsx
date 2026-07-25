@@ -67,6 +67,100 @@ function Card({ label, value, sub, tone }: { label: string; value: string; sub?:
   )
 }
 
+// Every prompt below is written to stand on its own in a fresh Claude Code session —
+// it names the repo, the files that matter, and how to verify the fix, because the
+// person pasting it won't have this dashboard's context in that window.
+const REPO_CONTEXT = `Repo: tca-hub (Next.js App Router). Retrieval lives in src/app/api/search/route.ts — Voyage embeddings into the match_chunks RPC over Supabase table page_chunks, plus keyword anchors for staff, calendar, and athletics questions. Content is scraped by the routes under src/app/api/crawl/. Verify any change by running the dev server and calling the API directly:
+curl -s -X POST http://localhost:3000/api/search -H 'Content-Type: application/json' -d '{"query":"YOUR QUERY"}'`
+
+const FIX_STEPS = `Work out which of the two it is before changing anything:
+1. Content gap — the page was never scraped. Search page_chunks for related text. If nothing's there, find the source page on tcatitans.org and extend the right ingest route.
+2. Retrieval bug — the content exists but doesn't match. Fix the embedding/anchoring path in search/route.ts.
+Then re-run the query above plus a few neighbouring ones (a staff question, a sports question, a calendar question) to confirm nothing else got dragged into the change.`
+
+function emptyResultPrompt(query: string, when?: string): string {
+  return `A parent asked TCA Hub this and got NO context back — the search found nothing to answer from:
+
+  "${query}"${when ? `\n  (asked ${new Date(when).toLocaleString()})` : ''}
+
+${REPO_CONTEXT}
+
+${FIX_STEPS}`
+}
+
+function thinResultPrompt(query: string, similarity: number | null, answer: string | null): string {
+  return `A parent asked TCA Hub this and got a weak answer — context was found but the best match only scored ${similarity != null ? similarity.toFixed(2) : 'low'} (anything under 0.55 is thin):
+
+  "${query}"
+${answer ? `\nThe answer it gave was:\n  "${answer.slice(0, 300)}"\n` : ''}
+${REPO_CONTEXT}
+
+${FIX_STEPS}`
+}
+
+function gapPrompt(label: string, ingestRoute: string, count: number, samples: string[]): string {
+  return `TCA Hub's analytics grouped ${count} failing question${count === 1 ? '' : 's'} under "${label}" — the suggested fix is re-running ${ingestRoute}, but confirm that's actually the problem first.
+
+Questions that failed:
+${samples.map(s => `  - "${s}"`).join('\n')}
+
+${REPO_CONTEXT}
+
+${FIX_STEPS}
+
+If it turns out the ingest route is the fix, run it and re-ask the questions above to confirm they now answer.`
+}
+
+function dashboardErrorPrompt(message: string, days: number): string {
+  return `The TCA Hub admin dashboard (src/app/nerds/page.tsx) failed to load its stats:
+
+  ${message}
+  (requesting a ${days}-day window from /api/admin/stats)
+
+The endpoint is src/app/api/admin/stats/route.ts — it reads the query_log and page_visits tables via the Supabase service-role client in src/lib/supabase.ts. Reproduce with:
+curl -s "http://localhost:3000/api/admin/stats?days=${days}"
+
+Find the cause, fix it, and confirm the dashboard renders at /nerds.`
+}
+
+function CopyPromptButton({ prompt, label = 'Copy fix prompt' }: { prompt: string; label?: string }) {
+  const [copied, setCopied] = useState(false)
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(prompt)
+    } catch {
+      // clipboard API needs a secure context — fall back for plain-http access
+      const ta = document.createElement('textarea')
+      ta.value = prompt
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <button
+      onClick={copy}
+      title="Copy a self-contained prompt to paste into Claude Code"
+      style={{
+        background: copied ? 'rgba(94,230,160,0.12)' : 'rgba(137,180,247,0.1)',
+        border: `1px solid ${copied ? 'rgba(94,230,160,0.4)' : 'rgba(137,180,247,0.3)'}`,
+        color: copied ? '#5ee6a0' : '#89b4f7',
+        borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 500,
+        cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit', transition: 'all 0.15s',
+      }}
+    >
+      {copied ? 'Copied ✓' : label}
+    </button>
+  )
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div style={{ marginTop: 28 }}>
@@ -121,7 +215,16 @@ export default function AdminDashboard() {
         </div>
 
         {loading && <p style={{ color: 'rgba(255,255,255,0.4)', marginTop: 24 }}>Loading…</p>}
-        {error && <p style={{ color: '#ff6b6b', marginTop: 24 }}>{error}</p>}
+        {error && (
+          <div style={{
+            marginTop: 24, background: 'rgba(255,107,107,0.08)', border: '1px solid rgba(255,107,107,0.3)',
+            borderRadius: 12, padding: '14px 18px', display: 'flex', justifyContent: 'space-between',
+            alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          }}>
+            <p style={{ color: '#ff6b6b', margin: 0, fontSize: 13 }}>{error}</p>
+            <CopyPromptButton prompt={dashboardErrorPrompt(error, days)} label="Copy fix prompt" />
+          </div>
+        )}
 
         {stats && !loading && (
           <>
@@ -195,7 +298,10 @@ export default function AdminDashboard() {
                     <div key={g.key} style={{ background: '#12182a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: '14px 18px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
                         <div style={{ fontSize: 14, fontWeight: 600 }}>{g.label} <span style={{ color: '#ff6b6b', fontWeight: 700 }}>({g.count})</span></div>
-                        <code style={{ fontSize: 11, color: '#89b4f7', background: 'rgba(137,180,247,0.1)', padding: '3px 8px', borderRadius: 6 }}>{g.ingestRoute}</code>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <code style={{ fontSize: 11, color: '#89b4f7', background: 'rgba(137,180,247,0.1)', padding: '3px 8px', borderRadius: 6 }}>{g.ingestRoute}</code>
+                          <CopyPromptButton prompt={gapPrompt(g.label, g.ingestRoute, g.count, g.samples)} />
+                        </div>
                       </div>
                       <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', marginTop: 8, lineHeight: 1.6 }}>
                         {g.samples.map((s, i) => <span key={i}>{i > 0 && ' · '}&ldquo;{s}&rdquo;</span>)}
@@ -224,6 +330,7 @@ export default function AdminDashboard() {
                   { key: 'query', label: 'Query', render: r => r.query },
                   { key: 'noResultCount', label: 'No-context hits', render: r => <span style={{ color: '#ff6b6b', fontWeight: 600 }}>{r.noResultCount}</span> },
                   { key: 'count', label: 'Times asked', render: r => String(r.count) },
+                  { key: 'fix', label: 'Fix', render: r => <CopyPromptButton prompt={emptyResultPrompt(r.query)} label="Copy prompt" /> },
                 ]}
                 empty="None — no question has ever come back empty in this window."
               />
@@ -235,6 +342,7 @@ export default function AdminDashboard() {
                 cols={[
                   { key: 'query', label: 'Query', render: r => r.query },
                   { key: 'created_at', label: 'When', render: r => new Date(r.created_at).toLocaleString() },
+                  { key: 'fix', label: 'Fix', render: r => <CopyPromptButton prompt={emptyResultPrompt(r.query, r.created_at)} label="Copy prompt" /> },
                 ]}
                 empty="None — everything found some context in this window."
               />
@@ -247,6 +355,7 @@ export default function AdminDashboard() {
                   { key: 'query', label: 'Query', render: r => r.query },
                   { key: 'similarity', label: 'Best match', render: r => r.similarity != null ? r.similarity.toFixed(2) : '—' },
                   { key: 'answer', label: 'Answer preview', render: r => <span style={{ color: 'rgba(255,255,255,0.5)' }}>{(r.answer ?? '').slice(0, 120)}</span> },
+                  { key: 'fix', label: 'Fix', render: r => <CopyPromptButton prompt={thinResultPrompt(r.query, r.similarity, r.answer)} label="Copy prompt" /> },
                 ]}
                 empty="None — every answered query had a strong match."
               />

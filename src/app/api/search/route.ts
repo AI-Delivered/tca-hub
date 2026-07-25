@@ -68,6 +68,56 @@ function roleScore(role: string, token: string): number {
   return r.startsWith(token) || r.startsWith(s) ? 1.5 : 1
 }
 
+// Whole-word match. Plain `includes` routed "what is the atten(dance) policy" to the
+// athletics chunks, "PTO (meet)ing" likewise, and "at (least)" would read as East.
+function hasTerm(text: string, term: string): boolean {
+  return new RegExp(`\\b${term}\\b`, 'i').test(text)
+}
+
+// Sport words that make a question an athletics question on their own. "match" and
+// "meet" are deliberately absent: as bare words they're far more often ordinary
+// English ("match my student to a teacher", "PTO meeting") than sports, and real
+// uses — "volleyball match", "track meet" — already carry a sport name.
+const SPORT_NAMES = [
+  'football', 'basketball', 'soccer', 'volleyball', 'baseball', 'softball',
+  'track', 'swim', 'cross country', 'wrestling', 'lacrosse', 'tennis', 'golf', 'cheer', 'dance',
+]
+const SPORT_TERMS = [
+  ...SPORT_NAMES,
+  'scrimmage', 'game', 'games', 'tournament', 'playoff', 'playoffs', 'championship',
+  'tryout', 'tryouts', 'practice', 'athletics', 'sport', 'sports',
+]
+
+const CAL_EVENT_TERMS = [
+  'literacy testing', 'picture day', 'field trip', 'open house', 'back to school',
+  'parent teacher', 'conference', 'curriculum night', 'grandparent', 'fall festival',
+  'spring fling', 'book fair', 'spirit week', 'talent show', 'science fair',
+  'kindergarten', 'early out', 'early release', 'no school', 'teacher inservice',
+  'teacher workday', 'work day', 'professional development', 'pd day', 'inservice day',
+  'first day', 'last day', 'winter break', 'spring break', 'fall break', 'thanksgiving',
+  'christmas', 'halloween', 'valentines', 'auction', 'carnival',
+  'mlk', 'martin luther king', 'presidents day', 'labor day', 'memorial day',
+  'veterans day', 'columbus day', 'holiday',
+  ...SPORT_TERMS,
+]
+
+// "when do the play(off)s start" and "when is the (off)ice open" both used to read as
+// days-off questions, which also suppressed the athletics and calendar paths below.
+const DAYS_OFF_RE = /days off|day off|school calendar|no.school days|holidays|\bdays? (out|closed)\b|when.*\b(off|closed|break)\b|schedule for the year|teacher work|workday|inservice|professional development|pd day|halloween|thanksgiving|christmas|winter break|spring break|fall break|no school/i
+// Arrival and dismissal are carpool questions, not "is there school that day" questions
+const CARPOOL_RE = /\b(drop[\s-]?off|pick[\s-]?up|carpool|car line|kiss and go|dismissal)\b/i
+
+const CALENDAR_CAMPUS_MAP: Record<string, string> = {
+  'east': 'east-elementary-calendar',
+  'central': 'central-elementary-calendar',
+  'north': 'north-elementary-calendar',
+  'junior high': 'junior-high-calendar',
+  'jh': 'junior-high-calendar',
+  'high school': 'high-school-calendar',
+  'college pathways': 'college-pathways-calendar',
+  'cp': 'college-pathways-calendar',
+}
+
 export async function POST(req: NextRequest) {
   const requestStart = Date.now()
   const { query, rawQuery, history = [] } = await req.json()
@@ -190,40 +240,12 @@ export async function POST(req: NextRequest) {
     keywordChunks = [...keywordChunks, ...(campusRows ?? []).map(c => ({ ...c, similarity: 0.7 }))]
   }
 
-  // Calendar keyword fallback: specific event names (literacy testing, picture day, etc.)
-  // won't score well in vector search because they appear in one monthly chunk among hundreds.
-  const calEventTerms = [
-    'literacy testing', 'picture day', 'field trip', 'open house', 'back to school',
-    'parent teacher', 'conference', 'curriculum night', 'grandparent', 'fall festival',
-    'spring fling', 'book fair', 'spirit week', 'talent show', 'science fair',
-    'kindergarten', 'early out', 'early release', 'no school', 'teacher inservice',
-    'teacher workday', 'work day', 'professional development', 'pd day', 'inservice day',
-    'first day', 'last day', 'winter break', 'spring break', 'fall break', 'thanksgiving',
-    'christmas', 'halloween', 'valentines', 'auction', 'carnival',
-    'mlk', 'martin luther king', 'presidents day', 'labor day', 'memorial day',
-    'veterans day', 'columbus day', 'holiday',
-    'scrimmage', 'game', 'match', 'meet', 'tournament', 'playoff', 'championship',
-    'tryout', 'practice', 'athletics', 'sport', 'football', 'basketball', 'soccer',
-    'volleyball', 'baseball', 'softball', 'track', 'swim', 'cross country', 'wrestling',
-    'lacrosse', 'tennis', 'golf', 'cheer', 'dance',
-  ]
-
   // Broad "days off" queries — pull monthly calendar chunks for the current school year.
   // Only include months from the current month onward so the AI isn't confused by past events.
-  const daysOffQuery = /days off|day off|school calendar|no.school days|holidays|days? (out|closed)|when.*(off|closed|break)|schedule for the year|teacher work|workday|inservice|professional development|pd day|halloween|thanksgiving|christmas|winter break|spring break|fall break|no school/i.test(query)
+  const daysOffQuery = DAYS_OFF_RE.test(query) && !CARPOOL_RE.test(query)
   if (daysOffQuery) {
-    const campusMap: Record<string, string> = {
-      'east': 'east-elementary-calendar',
-      'central': 'central-elementary-calendar',
-      'north': 'north-elementary-calendar',
-      'junior high': 'junior-high-calendar',
-      'jh': 'junior-high-calendar',
-      'high school': 'high-school-calendar',
-      'college pathways': 'college-pathways-calendar',
-      'cp': 'college-pathways-calendar',
-    }
-    const campusKey = Object.keys(campusMap).find(k => query.toLowerCase().includes(k))
-    const urlFilter = campusKey ? `%${campusMap[campusKey]}%` : '%-calendar%'
+    const campusKey = Object.keys(CALENDAR_CAMPUS_MAP).find(k => hasTerm(query, k))
+    const urlFilter = campusKey ? `%${CALENDAR_CAMPUS_MAP[campusKey]}%` : '%-calendar%'
 
     // Build list of future month-year slugs for the 2026-27 school year
     const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Denver' }))
@@ -262,14 +284,8 @@ export async function POST(req: NextRequest) {
     keywordChunks = [...keywordChunks, ...daysOffChunks]
   }
 
-  const sportTerms = [
-    'scrimmage', 'game', 'match', 'meet', 'tournament', 'playoff', 'championship',
-    'tryout', 'practice', 'athletics', 'sport', 'football', 'basketball', 'soccer',
-    'volleyball', 'baseball', 'softball', 'track', 'swim', 'cross country', 'wrestling',
-    'lacrosse', 'tennis', 'golf', 'cheer', 'dance',
-  ]
-  const isSportsQuery = !daysOffQuery && sportTerms.some(t => query.toLowerCase().includes(t))
-  const calTermMatch = !daysOffQuery && calEventTerms.find(t => query.toLowerCase().includes(t))
+  const isSportsQuery = !daysOffQuery && SPORT_TERMS.some(t => hasTerm(query, t))
+  const calTermMatch = !daysOffQuery ? CAL_EVENT_TERMS.find(t => hasTerm(query, t)) : undefined
 
   // Named sports only (excludes generic words like "game"/"practice"/"tournament") — used to
   // anchor the specific per-team chunk by title. There are 60+ near-identically-worded
@@ -278,11 +294,7 @@ export async function POST(req: NextRequest) {
   // "when does track start" query is essentially a coin flip — the same query can surface it
   // one run and miss it the next. Anchor it by keyword the same way the Upcoming chunk is
   // anchored, instead of leaving it to embedding-ranking luck.
-  const sportNames = [
-    'football', 'basketball', 'soccer', 'volleyball', 'baseball', 'softball',
-    'track', 'swim', 'cross country', 'wrestling', 'lacrosse', 'tennis', 'golf', 'cheer', 'dance',
-  ]
-  const matchedSport = sportNames.find(t => query.toLowerCase().includes(t))
+  const matchedSport = SPORT_NAMES.find(t => hasTerm(query, t))
 
   if (isSportsQuery) {
     // Always anchor sports queries with the GoBound upcoming chunk — it's the authoritative
@@ -306,18 +318,8 @@ export async function POST(req: NextRequest) {
 
   if (calTermMatch && !isSportsQuery) {
     // Non-sports calendar keyword — search campus calendars
-    const campusMap: Record<string, string> = {
-      'east': 'east-elementary-calendar',
-      'central': 'central-elementary-calendar',
-      'north': 'north-elementary-calendar',
-      'junior high': 'junior-high-calendar',
-      'jh': 'junior-high-calendar',
-      'high school': 'high-school-calendar',
-      'college pathways': 'college-pathways-calendar',
-      'cp': 'college-pathways-calendar',
-    }
-    const campusKey = Object.keys(campusMap).find(k => query.toLowerCase().includes(k))
-    const urlFilter = campusKey ? `%${campusMap[campusKey]}%` : '%-calendar%'
+    const campusKey = Object.keys(CALENDAR_CAMPUS_MAP).find(k => hasTerm(query, k))
+    const urlFilter = campusKey ? `%${CALENDAR_CAMPUS_MAP[campusKey]}%` : '%-calendar%'
     const { data: calRows } = await supabase
       .from('page_chunks')
       .select('url, title, content')
