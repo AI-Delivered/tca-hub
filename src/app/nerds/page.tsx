@@ -170,18 +170,100 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
+const KEY_STORAGE = 'tca_nerds_key'
+
+// The password is never compared here — whatever's typed is sent to the stats API,
+// which is the thing actually holding the door shut. A 401 comes back as "nope".
+function PasswordGate({ onUnlock }: { onUnlock: (key: string) => void }) {
+  const [value, setValue] = useState('')
+  const [showHint, setShowHint] = useState(false)
+  const [rejected, setRejected] = useState(false)
+  const [checking, setChecking] = useState(false)
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!value.trim() || checking) return
+    setChecking(true)
+    setRejected(false)
+    const res = await fetch(`/api/admin/stats?days=1`, { headers: { 'x-admin-key': value } })
+    setChecking(false)
+    if (res.ok) {
+      localStorage.setItem(KEY_STORAGE, value)
+      onUnlock(value)
+    } else {
+      setRejected(true)
+    }
+  }
+
+  return (
+    <div style={{ minHeight: '100vh', background: '#0a0e1a', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <form onSubmit={submit} style={{ width: '100%', maxWidth: 320, textAlign: 'center' }}>
+        <h1 style={{ fontSize: 18, fontWeight: 700, color: '#eaf0ff', margin: '0 0 6px' }}>Nerds only</h1>
+        <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.4)', margin: '0 0 18px' }}>Query analytics for TCA Hub.</p>
+        <input
+          type="password"
+          value={value}
+          onChange={e => { setValue(e.target.value); setRejected(false) }}
+          placeholder="Password"
+          autoFocus
+          style={{
+            width: '100%', background: '#12182a', color: '#eaf0ff', fontSize: 14, fontFamily: 'inherit',
+            border: `1px solid ${rejected ? 'rgba(255,107,107,0.5)' : 'rgba(255,255,255,0.12)'}`,
+            borderRadius: 10, padding: '11px 14px', outline: 'none',
+          }}
+        />
+        <button
+          type="submit"
+          disabled={checking || !value.trim()}
+          style={{
+            width: '100%', marginTop: 10, background: '#2a4080', color: '#fff', fontSize: 14, fontWeight: 600,
+            fontFamily: 'inherit', border: 'none', borderRadius: 10, padding: '11px 14px',
+            cursor: checking || !value.trim() ? 'default' : 'pointer', opacity: checking || !value.trim() ? 0.5 : 1,
+          }}
+        >
+          {checking ? 'Checking…' : 'Enter'}
+        </button>
+        {rejected && <p style={{ color: '#ff6b6b', fontSize: 12, marginTop: 10 }}>Not it.</p>}
+        <button
+          type="button"
+          onClick={() => setShowHint(true)}
+          style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.35)', fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', marginTop: 14, textDecoration: 'underline' }}
+        >
+          {showHint ? 'as soon as…' : 'Hint'}
+        </button>
+      </form>
+    </div>
+  )
+}
+
 export default function AdminDashboard() {
   useDarkBody()
   const [days, setDays] = useState(30)
   const [stats, setStats] = useState<Stats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // One piece of state, not two — localStorage can't be read during render without
+  // a hydration mismatch, so `checked` marks the gap before the effect has run.
+  const [auth, setAuth] = useState<{ checked: boolean; key: string | null }>({ checked: false, key: null })
+  const adminKey = auth.key
+  const setAdminKey = useCallback((key: string | null) => setAuth({ checked: true, key }), [])
 
-  const load = useCallback(async (d: number) => {
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reading persisted auth on mount
+    setAuth({ checked: true, key: localStorage.getItem(KEY_STORAGE) })
+  }, [])
+
+  const load = useCallback(async (d: number, key: string) => {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/admin/stats?days=${d}`)
+      const res = await fetch(`/api/admin/stats?days=${d}`, { headers: { 'x-admin-key': key } })
+      if (res.status === 401) {
+        // password changed underneath us — send them back to the gate
+        localStorage.removeItem(KEY_STORAGE)
+        setAdminKey(null)
+        return
+      }
       if (!res.ok) throw new Error(`Request failed (${res.status})`)
       setStats(await res.json())
     } catch (e) {
@@ -189,10 +271,13 @@ export default function AdminDashboard() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [setAdminKey])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount/dep-change pattern
-  useEffect(() => { load(days) }, [days, load])
+  useEffect(() => { if (adminKey) load(days, adminKey) }, [days, load, adminKey])
+
+  if (!auth.checked) return <div style={{ minHeight: '100vh', background: '#0a0e1a' }} />
+  if (!adminKey) return <PasswordGate onUnlock={setAdminKey} />
 
   const maxDaily = stats ? Math.max(1, ...stats.dailyVolume.map(d => d.total)) : 1
   const maxDailyVisits = stats ? Math.max(1, ...stats.visits.dailyVisits.map(d => d.count)) : 1

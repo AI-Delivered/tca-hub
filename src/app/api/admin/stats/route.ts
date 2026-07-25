@@ -63,7 +63,19 @@ interface LogRow {
   output_tokens: number | null
 }
 
+// The dashboard is a speed bump, not a vault — but the check belongs here rather
+// than in the page, so the numbers aren't served to anyone who simply skips the UI.
+// Set ADMIN_PASSWORD in the environment to change it without a deploy.
+function isAuthorized(req: Request): boolean {
+  const expected = process.env.ADMIN_PASSWORD ?? 'asdf'
+  const supplied = req.headers.get('x-admin-key') ?? new URL(req.url).searchParams.get('key')
+  return supplied === expected
+}
+
 export async function GET(req: Request) {
+  if (!isAuthorized(req)) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   const { searchParams } = new URL(req.url)
   const days = Math.min(Math.max(Number(searchParams.get('days') ?? 30), 1), 90)
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()

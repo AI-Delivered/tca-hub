@@ -107,6 +107,41 @@ const DAYS_OFF_RE = /days off|day off|school calendar|no.school days|holidays|\b
 // Arrival and dismissal are carpool questions, not "is there school that day" questions
 const CARPOOL_RE = /\b(drop[\s-]?off|pick[\s-]?up|carpool|car line|kiss and go|dismissal)\b/i
 
+const MONTH_NAMES = ['january','february','march','april','may','june','july','august','september','october','november','december']
+
+// TCA runs on Mountain Time; the server doesn't.
+function denverNow(): Date {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Denver' }))
+}
+
+// The school year runs August–June. Derived from today rather than hardcoded:
+// a pinned 2026-27 array meant that come July 2027 every month would fail the
+// "is it still ahead of us" test and days-off questions would quietly return
+// no calendar chunks at all.
+function schoolYearStart(now: Date): number {
+  return now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1
+}
+
+function schoolYearMonths(now: Date): Array<[number, number]> {
+  const start = schoolYearStart(now)
+  const months: Array<[number, number]> = []
+  for (let m = 7; m <= 11; m++) months.push([m, start])      // Aug–Dec
+  for (let m = 0; m <= 5; m++) months.push([m, start + 1])   // Jan–Jun
+  return months
+}
+
+// "October 2025" and "October 2024" chunks were being cited next to October 2026
+// for the same question. Vector search has no sense of which year is current, so
+// drop calendar chunks for months that have already passed.
+function isStaleCalendarChunk(chunk: { url: string; title: string }, now: Date): boolean {
+  if (!/-calendar/.test(chunk.url)) return false
+  const match = `${chunk.url} ${chunk.title}`.toLowerCase().match(/(january|february|march|april|may|june|july|august|september|october|november|december)[\s—-]+(20\d{2})/)
+  if (!match) return false
+  const month = MONTH_NAMES.indexOf(match[1])
+  const year = Number(match[2])
+  return year < now.getFullYear() || (year === now.getFullYear() && month < now.getMonth())
+}
+
 const CALENDAR_CAMPUS_MAP: Record<string, string> = {
   'east': 'east-elementary-calendar',
   'central': 'central-elementary-calendar',
@@ -120,6 +155,10 @@ const CALENDAR_CAMPUS_MAP: Record<string, string> = {
 
 export async function POST(req: NextRequest) {
   const requestStart = Date.now()
+  const now = denverNow()
+  const nowYear = now.getFullYear()
+  const nowMonth = now.getMonth()
+  const schoolYearLabel = `${schoolYearStart(now)}-${String(schoolYearStart(now) + 1).slice(2)}`
   const { query, rawQuery, history = [] } = await req.json()
   if (!query?.trim()) {
     return Response.json({ error: 'Query required' }, { status: 400 })
@@ -247,19 +286,9 @@ export async function POST(req: NextRequest) {
     const campusKey = Object.keys(CALENDAR_CAMPUS_MAP).find(k => hasTerm(query, k))
     const urlFilter = campusKey ? `%${CALENDAR_CAMPUS_MAP[campusKey]}%` : '%-calendar%'
 
-    // Build list of future month-year slugs for the 2026-27 school year
-    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Denver' }))
-    const monthNames = ['january','february','march','april','may','june','july','august','september','october','november','december']
-    const futureMonthSlugs: string[] = []
-    // School year: Aug 2026 – Jun 2027
-    const schoolYearMonths = [
-      [7,2026],[8,2026],[9,2026],[10,2026],[11,2026],[0,2027],[1,2027],[2,2027],[3,2027],[4,2027],[5,2027],
-    ]
-    for (const [m, y] of schoolYearMonths) {
-      if (y > now.getFullYear() || (y === now.getFullYear() && m >= now.getMonth())) {
-        futureMonthSlugs.push(`%${monthNames[m]}-${y}`)
-      }
-    }
+    const futureMonthSlugs = schoolYearMonths(denverNow())
+      .filter(([m, y]) => y > nowYear || (y === nowYear && m >= nowMonth))
+      .map(([m, y]) => `%${MONTH_NAMES[m]}-${y}`)
 
     // Fetch all future months in parallel (one query per month-year slug, deduplicated by campus)
     // Use High School as the canonical source for school-wide no-school days; add others for campus-specific events
@@ -326,17 +355,25 @@ export async function POST(req: NextRequest) {
       .ilike('url', urlFilter)
       .ilike('content', `%${calTermMatch}%`)
       .order('url', { ascending: true })
-      .limit(20)
-    const calChunks = (calRows ?? []).map(c => ({ ...c, similarity: 0.65 }))
+      .limit(60)
+    // Ordering is alphabetical by URL, so last year's months (…-april-2025) crowd
+    // out this year's. Over-fetch, drop the stale ones, then take the top 20.
+    const calChunks = (calRows ?? [])
+      .filter(c => !isStaleCalendarChunk(c, now))
+      .slice(0, 20)
+      .map(c => ({ ...c, similarity: 0.65 }))
     keywordChunks = [...keywordChunks, ...calChunks]
   }
 
-  // Merge: vector results first, then any keyword-only hits not already included
+  // Merge: vector results first, then any keyword-only hits not already included.
+  // Last year's calendar months are dropped here rather than at each fetch site,
+  // so vector hits are covered too — they're the ones that surfaced October 2024
+  // alongside October 2026 for the same question.
   const seenUrls = new Set((chunks ?? []).map((c: Chunk) => c.url))
   const merged: Chunk[] = [
     ...(chunks ?? []),
     ...keywordChunks.filter(c => !seenUrls.has(c.url)),
-  ]
+  ].filter(c => !isStaleCalendarChunk(c, now))
 
   const encoder = new TextEncoder()
 
@@ -475,7 +512,7 @@ High school grade levels: 9th = Freshman, 10th = Sophomore, 11th = Junior, 12th 
 
 Be smart about context: sports (football, basketball, soccer, wrestling, cheer, etc.), athletics schedules, and team-specific questions only apply to Junior High and High School — never mention elementary in those answers unless the parent specifically brings it up. Literacy testing (DIBELS, reading assessments, oral reading fluency, etc.) only applies to elementary campuses (Central, East, North) — never reference it for Junior High or High School. If the parent has a 5th grader and asks about football, answer for JH/HS and don't add a note about the elementary student.
 
-Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current time is approximately ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })} Mountain Time. Current school year is 2026-27. A date is "past" only if it is before TODAY's date — today's events are current and valid to cite regardless of month. Never dismiss July or August events as "summer break" — TCA runs athletics, camps, and activities year-round including summer. If you only have a past date for a recurring annual event, say "Last year it was [date] — the 2026-27 date hasn't been posted yet." Never call a future date "already passed."
+Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current time is approximately ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })} Mountain Time. Current school year is ${schoolYearLabel}. A date is "past" only if it is before TODAY's date — today's events are current and valid to cite regardless of month. Never dismiss July or August events as "summer break" — TCA runs athletics, camps, and activities year-round including summer. If you only have a past date for a recurring annual event, say "Last year it was [date] — the ${schoolYearLabel} date hasn't been posted yet." Never call a future date "already passed."
 
 Calendar data is authoritative: if the calendar context includes a month's events and a specific date in that month is NOT listed as a closure, no-school day, or break, then school IS in session on that date. You do not need to say "I'm not sure" — if you have the month's data and the date isn't listed as a closure, confidently say school is in session. Only express uncertainty if you don't have that month's calendar data at all.
 
