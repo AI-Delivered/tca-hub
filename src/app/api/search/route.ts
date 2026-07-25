@@ -26,12 +26,6 @@ const CAMPUS_ALIASES: Array<[RegExp, string]> = [
 
 const STAFF_QUERY_RE = /principal|teacher|teaches|counsel|dean|nurse|secretar|registrar|librarian|coach|director|superintendent|paraprofessional|\bpara\b|\baide\b|specialist|psychologist|therapist|pathologist|custodian|bookkeeper|receptionist|front office|faculty|instructor|staff|who works/i
 
-// Mentioning a role isn't the same as asking who holds it. "How do I match my
-// student to a teacher" is a process question, and answering it with six
-// teachers' headshots is noise — the question has to actually be after a person.
-const PERSON_SEEKING_RE = /\bwho(s|se|m)?\b|\b(email|e-mail|contact|reach|phone)\b|\bname of\b|\bmeet the\b/i
-const LEADERSHIP_RE = /principal|dean|counsel|director|head of school|superintendent/i
-
 // The name regex used for keyword retrieval is case-insensitive, so "who is the
 // principal at East" captures "the principal at East" — a role question wearing a
 // name's clothes. Only treat a capture as a person when it holds no role or campus
@@ -63,15 +57,6 @@ function stem(token: string): string {
   if (token.length > 4 && token.endsWith('es')) return token.slice(0, -2)
   if (token.length > 3 && token.endsWith('s')) return token.slice(0, -1)
   return token
-}
-
-// Score, not a boolean: "Principal" should outrank "Assistant Principal" when the
-// query asks for the principal.
-function roleScore(role: string, token: string): number {
-  const r = role.toLowerCase()
-  const s = stem(token)
-  if (!r.includes(token) && !r.includes(s)) return 0
-  return r.startsWith(token) || r.startsWith(s) ? 1.5 : 1
 }
 
 // Whole-word match. Plain `includes` routed "what is the atten(dance) policy" to the
