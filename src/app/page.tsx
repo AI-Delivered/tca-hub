@@ -778,7 +778,7 @@ export default function Home() {
               // The server sends a sanitized reason; never render a raw API
               // message to a parent regardless of what arrives here.
               setError(event.message === 'assistant unavailable'
-                ? 'The assistant is temporarily unavailable — the sources above should still help.'
+                ? 'The assistant is temporarily unavailable — the links below should still help.'
                 : 'Something went wrong. Please try again.')
             }
           } catch { /* ignore malformed lines */ }

@@ -1,7 +1,29 @@
 import { NextRequest } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { getCache } from '@vercel/functions'
+import { queryKey } from '@/lib/query-key'
 
 export const maxDuration = 60
+
+// Answer cache. Parents ask the same handful of things — the dashboard's "top
+// repeated questions" is the whole business case — and every repeat was paying
+// for an embedding, a retrieval, and a full generation. A hit skips all three.
+//
+// Keyed on the canonical form of the question, so "Whos the MS principal" and
+// "who is the junior high principal" share an entry, and on today's date, so a
+// cached answer can never be served across a day boundary.
+const CACHE_VERSION = 'v1'
+// Schedules move and "the next game" changes; who the principal is does not.
+const VOLATILE_TTL = 15 * 60
+const STABLE_TTL = 6 * 60 * 60
+const VOLATILE_RE = /\b(today|tomorrow|tonight|this week|next week|game|practice|schedule|when is|what time|upcoming|closed|snow)\b/i
+
+interface CachedAnswer {
+  answer: string
+  sources: { url: string; title: string }[]
+  staffCards: { name: string; role: string; email: string; photo: string; campus: string }[]
+  model: string
+}
 
 // Parents don't speak the website's dialect: they say "middle school" where every
 // chunk says "Junior High", so the embedding has nothing to latch onto and the
@@ -153,6 +175,49 @@ export async function POST(req: NextRequest) {
   const { query, rawQuery, history = [], debug = false } = await req.json()
   if (!query?.trim()) {
     return Response.json({ error: 'Query required' }, { status: 400 })
+  }
+
+  const encoder = new TextEncoder()
+  const send = (obj: unknown) => encoder.encode(JSON.stringify(obj) + '\n')
+  const logQuery = (rawQuery ?? query).trim().slice(0, 500)
+
+  // Follow-ups depend on what was said earlier, so only standalone questions are
+  // cacheable. Debug runs bypass the cache so measurements reflect real retrieval.
+  const cacheable = !debug && (history as unknown[]).length === 0
+  const cacheKey = `answer:${CACHE_VERSION}:${now.toISOString().slice(0, 10)}:${queryKey(query)}`
+  const cache = getCache()
+
+  if (cacheable) {
+    let hit: CachedAnswer | undefined
+    try {
+      hit = await cache.get(cacheKey) as CachedAnswer | undefined
+    } catch { /* cache unavailable — answer the question the slow way */ }
+
+    if (hit?.answer) {
+      const supabaseLog = getSupabaseAdmin()
+      supabaseLog.from('query_log').insert({
+        query: logQuery,
+        had_results: true,
+        source_count: hit.sources.length,
+        top_similarity: null,
+        model: 'cache',
+        latency_ms: Date.now() - requestStart,
+        answer_preview: hit.answer.slice(0, 2000),
+        input_tokens: 0,
+        output_tokens: 0,
+      }).then(() => {})
+
+      const cachedStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(send({ type: 'sources', sources: hit.sources }))
+          if (hit.staffCards?.length) controller.enqueue(send({ type: 'staffCards', staffCards: hit.staffCards }))
+          controller.enqueue(send({ type: 'text', text: hit.answer }))
+          controller.enqueue(send({ type: 'done' }))
+          controller.close()
+        },
+      })
+      return new Response(cachedStream, { headers: { 'Content-Type': 'application/x-ndjson', 'x-tca-cache': 'hit' } })
+    }
   }
 
   const [{ VoyageAIClient }, { default: Anthropic }] = await Promise.all([
@@ -366,13 +431,8 @@ export async function POST(req: NextRequest) {
     ...keywordChunks.filter(c => !seenUrls.has(c.url)),
   ].filter(c => !isStaleCalendarChunk(c, now))
 
-  const encoder = new TextEncoder()
-
-  const send = (obj: unknown) => encoder.encode(JSON.stringify(obj) + '\n')
-
   if (!merged?.length) {
     const noResultsAnswer = "I couldn't find information about that on the TCA website. Try rephrasing your question or visit tcatitans.org directly."
-    const logQuery = (rawQuery ?? query).trim().slice(0, 500)
     supabase.from('query_log').insert({
       query: logQuery,
       had_results: false,
@@ -446,6 +506,31 @@ export async function POST(req: NextRequest) {
       // chunk, and the card reads "Role · Campus" — prefer the specific one.
       if (!prev || (entry.campus && !prev.campus)) staffIndex.set(key, entry)
     }
+  }
+
+  // A staff question is really a database lookup wearing a sentence — the name,
+  // role, campus and email are all sitting in the retrieved chunks. When the
+  // model can't be reached, answer those directly instead of shrugging.
+  function answerFromData(): string | null {
+    if (!personName && !(STAFF_QUERY_RE.test(query) && roleTokens.length)) return null
+
+    const matches: StaffCard[] = []
+    for (const entry of staffIndex.values()) {
+      if (wantCampus && entry.campus && entry.campus !== wantCampus) continue
+      const byName = personName && entry.name.toLowerCase().includes(personName.toLowerCase())
+      const byRole = !personName && roleTokens.every((t: string) => {
+        const r = entry.role.toLowerCase()
+        return r.includes(t) || r.includes(stem(t))
+      })
+      if (byName || byRole) matches.push(entry)
+    }
+    if (!matches.length || matches.length > 8) return null
+
+    const lines = matches.map(m => {
+      const where = m.campus ? ` at ${m.campus}` : ''
+      return `- **${m.name}** — ${m.role}${where}${m.email ? ` — ${m.email}` : ''}`
+    })
+    return `${lines.join('\n')}\n\n*(Straight from the staff directory — the assistant is temporarily unavailable, so this is the raw listing rather than a written answer.)*`
   }
 
   function cardsNamedIn(answer: string): StaffCard[] {
@@ -624,7 +709,6 @@ Answer style:
 - For lists (spelling words, supply lists, etc.): reproduce them completely, don't summarize.
 - You're in a conversation — use prior context naturally. **Conversation context beats profile**: if the prior turn mentioned a specific campus or school, assume that campus for follow-up questions without clarifying.`
 
-  const logQuery = (rawQuery ?? query).trim().slice(0, 500)
   const topSimilarity = merged.reduce((max: number, c: Chunk) => Math.max(max, c.similarity), 0)
 
   // Escalate to Sonnet only on the harder cases — weak retrieval match (model has to
@@ -684,14 +768,33 @@ Answer style:
         // succeeded, so fall back to handing them the pages it found.
         failure = String(e)
         console.error('answer generation failed:', failure)
-        const fallback = sources.length
-          ? "I can't write an answer right now — the assistant is temporarily unavailable. The pages below should have what you're looking for."
-          : "I can't answer right now — the assistant is temporarily unavailable. Please try again in a few minutes, or visit [tcatitans.org](https://www.tcatitans.org)."
+        // Retrieval doesn't touch Anthropic, so the data is sitting right here.
+        // For the questions we can answer straight from it — who someone is, how
+        // to reach them — compose the answer ourselves rather than apologising.
+        const fromData = answerFromData()
+        const fallback = fromData
+          ?? (sources.length
+            ? "I can't write a full answer right now — the assistant is temporarily unavailable. The links below should have what you're looking for."
+            : "I can't answer right now — the assistant is temporarily unavailable. Please try again in a few minutes, or visit [tcatitans.org](https://www.tcatitans.org).")
         if (!answerText) {
           answerText = fallback
           controller.enqueue(send({ type: 'text', text: fallback }))
+          pushCards()
         }
-        controller.enqueue(send({ type: 'error', message: 'assistant unavailable' }))
+        if (!fromData) controller.enqueue(send({ type: 'error', message: 'assistant unavailable' }))
+      }
+
+      // Only a real generation is worth caching — never an outage message, and
+      // never a follow-up whose meaning depends on the turn before it.
+      if (cacheable && !failure && answerText.trim().length > 20) {
+        const ttl = VOLATILE_RE.test(query) ? VOLATILE_TTL : STABLE_TTL
+        cache.set(cacheKey, {
+          answer: answerText,
+          sources,
+          staffCards: cardsNamedIn(answerText),
+          model: MODEL,
+        } satisfies CachedAnswer, { ttl, tags: ['answers'], name: 'tca-answer' })
+          .catch(() => { /* cache write failed — the answer still went out */ })
       }
 
       // Log query + answer (fire and forget — never blocks the response).

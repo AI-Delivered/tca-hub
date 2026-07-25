@@ -46,6 +46,9 @@ const FILLER = new Set([
   'the', 'a', 'an', 'at', 'in', 'on', 'of', 'for', 'to', 'is', 'are', 'was', 'were',
   'be', 'do', 'does', 'did', 'my', 'our', 'me', 'i', 'we', 'you', 'your', 'it', 'its',
   'that', 'this', 'there', 'and', 'or', 'with', 'about', 'please', 'tell', 'know',
+  // "what is X" and "X" are the same question; who/when/where are kept because
+  // they genuinely distinguish one from another.
+  'what',
   'need', 'want', 'can', 'could', 'would', 'get', 'find', 'looking', 'anyone',
   'someone', 'tca', 'titans', 'school', 'schools', 'campus', 'info', 'information',
   'have', 'has', 'go', 'going', 'up', 'out', 'any', 'some', 'next', 'new',

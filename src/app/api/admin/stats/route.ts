@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { queryKey } from '@/lib/query-key'
 
 export const maxDuration = 30
 
@@ -114,9 +115,10 @@ export async function GET(req: Request) {
   // The needs-attention lists describe the CURRENT state of each question, not
   // its history: a question is judged by its most recent run, so one that's since
   // been fixed drops off, and one that broke again after a fix comes back.
-  // Punctuation is stripped so "Who's the principal" and "Whos the principal"
-  // count as the same question — parents retype, they don't paste.
-  const normalize = (q: string) => q.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim()
+  // Questions are compared on their canonical form, so "Who's the middle school
+  // principal", "Whos the MS principal" and "who is the junior high principal"
+  // are one question — see src/lib/query-key.ts.
+  const normalize = queryKey
   const latestRun = new Map<string, LogRow>()
   for (const r of rows) {
     const key = normalize(r.query)
@@ -175,7 +177,7 @@ export async function GET(req: Request) {
   // Top repeated queries (case-insensitive, trimmed)
   const freq = new Map<string, { query: string; count: number; noResultCount: number }>()
   for (const r of rows) {
-    const key = r.query.trim().toLowerCase()
+    const key = normalize(r.query)
     if (!key) continue
     const bucket = freq.get(key) ?? { query: r.query.trim(), count: 0, noResultCount: 0 }
     bucket.count++
@@ -199,7 +201,7 @@ export async function GET(req: Request) {
   const noResultSeen = new Set<string>()
   const noResultQueries = noResults
     .filter(r => {
-      const key = r.query.trim().toLowerCase()
+      const key = normalize(r.query)
       if (noResultSeen.has(key)) return false
       noResultSeen.add(key)
       return true

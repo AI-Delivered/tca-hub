@@ -13,6 +13,7 @@
     "@anthropic-ai/sdk": "^0.112.4",
     "@supabase/ssr": "^0.12.3",
     "@supabase/supabase-js": "^2.110.7",
+    "@vercel/functions": "^3.7.6",
     "ai": "^7.0.31",
     "marked": "^18.0.7",
     "next": "16.2.10",
