@@ -152,7 +152,7 @@ function CyclingText() {
 
   return (
     <span style={{ display: 'inline-block', maxWidth: '100%', verticalAlign: 'bottom' }}>
-      <span style={{ color: 'var(--crimson)' }}>{text}</span>
+      <span style={{ color: 'var(--crimson-text)' }}>{text}</span>
       <span className="tca-cycle-cursor" aria-hidden="true" />
     </span>
   )
@@ -737,7 +737,7 @@ export default function Home() {
                     href="https://ai-delivered.com/local"
                     target="_blank"
                     rel="noopener noreferrer"
-                    style={{ color: 'var(--crimson)', textDecoration: 'none' }}
+                    style={{ color: 'var(--crimson-text)', textDecoration: 'none' }}
                   >
                     ai-delivered
                   </a>

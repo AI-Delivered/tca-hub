@@ -11,10 +11,16 @@
 :root {
   color-scheme: light;
 
-  /* Brand */
+  /* Brand.
+
+     Two tokens, because one colour cannot do both jobs. --crimson is the fill:
+     it sits behind white text on buttons, so it has to stay dark. --crimson-text
+     is crimson used AS text against --bg, so it has to stay light enough to read.
+     On the light theme they are the same value; on dark they cannot be. */
   --navy: #1a2d5a;
   --navy-mid: #2a4080;
-  --crimson: #b91c3a;
+  --crimson: #b91c3a;        /* white on it: 6.4:1 */
+  --crimson-text: #b91c3a;   /* on --bg: 6.0:1 */
   --crimson-soft: rgba(185, 28, 58, 0.1);
 
   /* Surfaces */
@@ -88,8 +94,17 @@
     --text-muted: #b3bed4;     /*  9.4:1 */
     --text-dim: #8f9bb5;       /*  6.3:1 */
 
-    --crimson: #ff5c78;        /*  6.0:1 — the print crimson is 2.2:1 on dark */
-    --crimson-soft: rgba(255, 92, 120, 0.14);
+    /* The fill keeps the print crimson in dark mode too — it is a background,
+       not a foreground, so the dark bg behind it is irrelevant and white text
+       on it still reads at 6.4:1. It used to be lightened to #ff5c78 along with
+       the text, which turned every button salmon AND dropped white-on-button to
+       2.98:1, below AA. Both problems were the one token doing two jobs. */
+    --crimson: #b91c3a;
+    /* Crimson as text on #0a0e1a. The print crimson is 3.0:1 here, so this is
+       the same hue (348°) lifted just far enough to clear AA at 4.6:1, and
+       held at 50% saturation so it reads as the brand red rather than pink. */
+    --crimson-text: #c7576d;
+    --crimson-soft: rgba(199, 87, 109, 0.16);
 
     --answer-bg: #131a2b;
     --answer-bg-sunken: #0e1422;
@@ -180,7 +195,7 @@ body {
 
 .tca-wordmark b {
   font-weight: 600;
-  color: var(--crimson);
+  color: var(--crimson-text);
 }
 
 .tca-tagline {
@@ -214,7 +229,7 @@ body {
   .tca-bg-glow {
     background:
       radial-gradient(ellipse 70% 45% at 50% -5%, rgba(88, 128, 255, 0.1) 0%, transparent 70%),
-      radial-gradient(ellipse 40% 30% at 85% 90%, rgba(255, 92, 120, 0.08) 0%, transparent 60%);
+      radial-gradient(ellipse 40% 30% at 85% 90%, rgba(199, 87, 109, 0.1) 0%, transparent 60%);
   }
 }
 
@@ -277,6 +292,12 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: none;
+  /* The form and column centre their text, and an input's UA default is
+     `start` — so the input ignores that inheritance and this layer would not.
+     As a flex container it was packed left and the difference never showed;
+     as a block it centred the line and threw the completion ~148px right.
+     Matching the input's value explicitly is what actually makes them agree. */
+  text-align: start;
   /* Deliberately NOT a flex container. Under `align-items: baseline` the line's
      baseline is set by the tallest item's ascent, so the TAB pill — an
      inline-block a shade taller than the text above the baseline — dragged both
@@ -551,7 +572,7 @@ body {
 .tca-source-num {
   font-family: ui-monospace, 'SF Mono', monospace;
   font-size: 9.5px;
-  color: var(--crimson);
+  color: var(--crimson-text);
   min-width: 14px;
   flex-shrink: 0;
 }
@@ -684,7 +705,7 @@ body {
 .tca-staff-role { font-size: 12.5px; color: var(--text-dim); margin-bottom: 4px; }
 .tca-staff-email {
   font-size: 12.5px;
-  color: var(--crimson);
+  color: var(--crimson-text);
   text-decoration: none;
   font-weight: 500;
   overflow-wrap: anywhere;
@@ -880,7 +901,7 @@ body {
   transition: color var(--fast);
 }
 
-.tca-link-btn:hover { color: var(--crimson); }
+.tca-link-btn:hover { color: var(--crimson-text); }
 
 .tca-footer {
   position: relative;
