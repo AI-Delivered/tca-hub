@@ -239,6 +239,12 @@ body {
   padding: 18px 64px 18px 26px;
   font-size: 16px;
   font-family: inherit;
+  /* Pinned, not inherited. Tailwind's preflight puts 1.5 on the root and form
+     controls inherit it, which silently made this 24px while .tca-ghost was
+     pinned to `normal` (~20.5px) — half-leading differs by half the gap, so the
+     grey completion sat 1.75px above the typed text. Both layers now state the
+     same number, and neither follows preflight. */
+  line-height: 24px;
   color: var(--text-primary);
   outline: none;
   transition: border-color var(--med), box-shadow var(--med);
@@ -252,7 +258,9 @@ body {
    every metric that affects where a glyph lands — font, size, weight, letter
    spacing, padding, border width — because the alignment is achieved by
    rendering the typed portion invisibly here and letting it push the grey part
-   into place. Change a value in .tca-search-input and it has to change here. */
+   into place. Change a value in .tca-search-input and it has to change here —
+   including line-height, which affects the baseline rather than the advance
+   width and so shows up as a vertical offset, not a horizontal one. */
 .tca-ghost {
   position: absolute;
   inset: 0;
@@ -263,20 +271,25 @@ body {
   padding: 18px 64px 18px 26px;
   font-size: 16px;
   font-family: inherit;
-  line-height: normal;
+  line-height: 24px;
   letter-spacing: normal;
   white-space: pre;
   overflow: hidden;
+  text-overflow: ellipsis;
   pointer-events: none;
-  display: flex;
-  align-items: baseline;
+  /* Deliberately NOT a flex container. Under `align-items: baseline` the line's
+     baseline is set by the tallest item's ascent, so the TAB pill — an
+     inline-block a shade taller than the text above the baseline — dragged both
+     spans 0.75px below the input's own text. A plain line box is governed by
+     the strut that `line-height` creates, which the pill is smaller than, so
+     the glyphs land where the input's do no matter what sits beside them. */
+  display: block;
 }
 
 /* Occupies the exact width of what's been typed, and shows none of it — the
    real characters are painted by the input on the layer above. */
 .tca-ghost-typed {
   visibility: hidden;
-  flex-shrink: 0;
 }
 
 .tca-ghost-completion {
@@ -284,13 +297,20 @@ body {
   pointer-events: auto;
   cursor: pointer;
   white-space: pre;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Containing block for the TAB pill, which is taken out of flow below. */
+  position: relative;
 }
 
+/* Out of flow on purpose. In flow it is an inline-block standing ~0.75px taller
+   above the baseline than the text does, and an inline-level box taller than
+   the strut raises the line box's ascent — which pushed every glyph on this
+   layer below the ones the input paints. Absolutely positioned, it is not
+   inline-level at all and the line box is the text's alone. */
 .tca-ghost-key {
-  display: inline-block;
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
   margin-left: 10px;
   padding: 1px 6px;
   border: 1px solid var(--border);
@@ -299,8 +319,9 @@ body {
   font-family: ui-monospace, 'SF Mono', monospace;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  line-height: normal;
   color: var(--text-dim);
-  vertical-align: 1px;
+  white-space: pre;
 }
 
 /* No Tab key to press, and the hint would just be noise. */
