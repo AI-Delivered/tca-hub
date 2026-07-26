@@ -228,7 +228,11 @@ body {
 
 .tca-search-input {
   width: 100%;
-  background: var(--surface);
+  /* The fill is painted by .tca-ghost underneath, so the grey completion on
+     that layer shows through. */
+  background: transparent;
+  position: relative;
+  z-index: 1;
   border: 1.5px solid var(--border);
   border-radius: var(--radius-pill);
   /* 16px minimum, or iOS Safari zooms the whole page on focus. */
@@ -239,6 +243,69 @@ body {
   outline: none;
   transition: border-color var(--med), box-shadow var(--med);
   box-shadow: var(--shadow-sm), var(--shadow-md);
+}
+
+/* Inline completion.
+
+   The grey text lives in a layer beneath the input, and the input's background
+   is painted on this layer instead so the text shows through. Both layers share
+   every metric that affects where a glyph lands — font, size, weight, letter
+   spacing, padding, border width — because the alignment is achieved by
+   rendering the typed portion invisibly here and letting it push the grey part
+   into place. Change a value in .tca-search-input and it has to change here. */
+.tca-ghost {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--surface);
+  border: 1.5px solid transparent;
+  border-radius: var(--radius-pill);
+  padding: 18px 64px 18px 26px;
+  font-size: 16px;
+  font-family: inherit;
+  line-height: normal;
+  letter-spacing: normal;
+  white-space: pre;
+  overflow: hidden;
+  pointer-events: none;
+  display: flex;
+  align-items: baseline;
+}
+
+/* Occupies the exact width of what's been typed, and shows none of it — the
+   real characters are painted by the input on the layer above. */
+.tca-ghost-typed {
+  visibility: hidden;
+  flex-shrink: 0;
+}
+
+.tca-ghost-completion {
+  color: var(--text-dim);
+  pointer-events: auto;
+  cursor: pointer;
+  white-space: pre;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tca-ghost-key {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  vertical-align: 1px;
+}
+
+/* No Tab key to press, and the hint would just be noise. */
+@media (hover: none) {
+  .tca-ghost-key { display: none; }
 }
 
 .tca-search-input::placeholder { color: var(--text-dim); }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback, useMemo, useId, useSyncExternalStore } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, useId } from 'react'
 import { renderAnswer, preloadSanitizer } from '@/lib/markdown'
 
 const SUGGESTIONS = [
@@ -23,25 +23,10 @@ const SUGGESTIONS = [
   'lunch menu this week',
 ]
 
-const DEFAULT_CHIPS = [
-  'When does school start?',
-  "What's the dress code?",
-  'How do I report an absence?',
-  'What time does school end?',
-  'Staff directory',
-  'School supply lists',
-]
-
 const CAMPUSES = ['Central Elementary', 'East Elementary', 'North Elementary', 'Junior High', 'High School', 'College Pathways', 'Cottage School']
 const ELEMENTARY_GRADES = ['Kindergarten', '1st Grade', '2nd Grade', '3rd Grade', '4th Grade', '5th Grade', '6th Grade']
 const SECONDARY_GRADES = ['7th Grade', '8th Grade', '9th Grade', '10th Grade', '11th Grade', '12th Grade']
 const ALL_GRADES = [...ELEMENTARY_GRADES, ...SECONDARY_GRADES]
-
-interface TcaUserContext {
-  campuses: string[]
-  grades: string[]
-  onboarded: boolean
-}
 
 interface Source {
   url: string
@@ -61,120 +46,6 @@ interface Exchange {
   answer: string
   sources: Source[]
   staffCards?: StaffCardData[]
-}
-
-/* ── Saved preferences ────────────────────────────────────────────────────
-   Campus and grade live in localStorage and are prepended to the question as
-   a short context line. The system prompt is explicit that it must not say
-   "your student" unless the parent has said which one they have — this is how
-   they say it.
-   ──────────────────────────────────────────────────────────────────────── */
-
-const CONTEXT_KEY = 'tca_context'
-
-function readContext(): TcaUserContext | null {
-  try {
-    const raw = localStorage.getItem(CONTEXT_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as Partial<TcaUserContext>
-    // Whatever is in storage is a year-old string written by an older version
-    // of this file, or edited by hand. Only known campuses and grades survive.
-    return {
-      campuses: Array.isArray(parsed.campuses) ? parsed.campuses.filter(c => CAMPUSES.includes(c)) : [],
-      grades: Array.isArray(parsed.grades) ? parsed.grades.filter(g => ALL_GRADES.includes(g)) : [],
-      onboarded: parsed.onboarded === true,
-    }
-  } catch { return null }
-}
-
-// localStorage is an external store, so it is read as one. Reading it in an
-// effect and calling setState meant an extra render on every load; a lazy
-// useState initializer would have meant a hydration mismatch, because the
-// server has no idea which campus this parent picked. useSyncExternalStore
-// handles both: null during hydration, the stored value immediately after.
-const contextListeners = new Set<() => void>()
-let contextCache: TcaUserContext | null | undefined
-
-function subscribeContext(onChange: () => void) {
-  contextListeners.add(onChange)
-  // Another tab changing preferences should update this one.
-  const onStorage = (e: StorageEvent) => {
-    if (e.key !== CONTEXT_KEY) return
-    contextCache = undefined
-    contextListeners.forEach(l => l())
-  }
-  window.addEventListener('storage', onStorage)
-  return () => {
-    contextListeners.delete(onChange)
-    window.removeEventListener('storage', onStorage)
-  }
-}
-
-function getContextSnapshot(): TcaUserContext | null {
-  if (contextCache === undefined) contextCache = readContext()
-  return contextCache
-}
-
-function getContextServerSnapshot(): TcaUserContext | null {
-  return null
-}
-
-function saveContext(ctx: TcaUserContext) {
-  try { localStorage.setItem(CONTEXT_KEY, JSON.stringify(ctx)) } catch { /* private mode */ }
-  contextCache = ctx
-  contextListeners.forEach(l => l())
-}
-
-function inferCampusFromGrade(grade: string): string | null {
-  if (['7th Grade', '8th Grade'].includes(grade)) return 'Junior High'
-  if (['9th Grade', '10th Grade', '11th Grade', '12th Grade'].includes(grade)) return 'High School'
-  return null
-}
-
-function buildContextPrefix(ctx: TcaUserContext | null): string {
-  if (!ctx) return ''
-  const inferred = ctx.grades.map(inferCampusFromGrade).filter((c): c is string => c !== null)
-  const campuses = [...new Set([...ctx.campuses, ...inferred])]
-  const parts: string[] = []
-  if (ctx.grades.length) parts.push(ctx.grades.join(', '))
-  if (campuses.length) parts.push(`at ${campuses.join(' and ')}`)
-  return parts.length ? `[Context: parent of a ${parts.join(' student ')}] ` : ''
-}
-
-/** Chips that read the clock: on a Friday evening, offer the weekend's games. */
-function getTimeAwareChips(): string[] {
-  try {
-    const mt = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Denver' }))
-    const hour = mt.getHours()
-    const day = mt.getDay()
-    if (day === 0 && hour >= 17) return ["What's on the calendar this week?", 'Any practices this week?']
-    if (day === 5 && hour >= 15) return ['Any games this weekend?', 'Friday night schedule']
-    if ((day === 6 || (day === 0 && hour < 15)) && hour < 21) return ['Any games today?', 'Weekend schedule']
-    if (hour >= 6 && hour < 11 && day >= 1 && day <= 5) return ["What's happening today?", 'Any practice today?']
-    if (hour >= 14 && hour < 21 && day >= 1 && day <= 4) return ['Any events tomorrow?', 'Practice tomorrow?']
-  } catch { /* exotic locale */ }
-  return []
-}
-
-function buildPersonalizedChips(ctx: TcaUserContext | null, trending: string[]): string[] {
-  const chips: string[] = [...getTimeAwareChips()]
-
-  if (ctx?.grades.length === 1) {
-    chips.push(`Supply list for ${ctx.grades[0]}`)
-  }
-  if (ctx?.campuses.length === 1) {
-    chips.push(`Bell schedule at ${ctx.campuses[0]}`)
-  }
-
-  const add = (candidate: string) => {
-    if (chips.length >= 4) return
-    if (candidate.length > 42) return
-    if (chips.some(c => c.toLowerCase() === candidate.toLowerCase())) return
-    chips.push(candidate)
-  }
-  trending.forEach(add)
-  DEFAULT_CHIPS.forEach(add)
-  return chips.slice(0, 4)
 }
 
 /* ── Small pieces ─────────────────────────────────────────────────────── */
@@ -393,91 +264,6 @@ function CalendarPanel({ onClose }: { onClose: () => void }) {
   )
 }
 
-function PreferencesPanel({ initial, onSave, onClose }: {
-  initial: TcaUserContext | null
-  onSave: (ctx: TcaUserContext) => void
-  onClose: () => void
-}) {
-  const ref = useDialog(onClose)
-  const titleId = useId()
-  const [campuses, setCampuses] = useState<string[]>(initial?.campuses ?? [])
-  const [grades, setGrades] = useState<string[]>(initial?.grades ?? [])
-
-  const toggle = <T,>(arr: T[], val: T): T[] => (arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val])
-
-  return (
-    <div className="tca-scrim" data-align="center" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="tca-dialog" ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId}>
-        <div className="tca-dialog-head">
-          <div>
-            <h2 className="tca-dialog-title" id={titleId}>Who are you asking for?</h2>
-            <p className="tca-dialog-sub">
-              Answers get tailored to your student&apos;s campus and grade. Saved on this device only, and you can change it any time.
-            </p>
-          </div>
-          <button className="tca-dialog-close" onClick={onClose} aria-label="Close preferences">
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-              <path d="M4.5 4.5l9 9M13.5 4.5l-9 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-            </svg>
-          </button>
-        </div>
-
-        <fieldset style={{ border: 0, padding: 0, margin: '0 0 20px' }}>
-          <legend className="tca-field-label">Campus</legend>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {CAMPUSES.map(c => (
-              <button
-                key={c}
-                type="button"
-                className="tca-toggle"
-                aria-pressed={campuses.includes(c)}
-                onClick={() => setCampuses(prev => toggle(prev, c))}
-              >
-                {c}
-              </button>
-            ))}
-          </div>
-        </fieldset>
-
-        <fieldset style={{ border: 0, padding: 0, margin: '0 0 26px' }}>
-          <legend className="tca-field-label">Grade</legend>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {ALL_GRADES.map(g => (
-              <button
-                key={g}
-                type="button"
-                className="tca-toggle"
-                aria-pressed={grades.includes(g)}
-                onClick={() => setGrades(prev => toggle(prev, g))}
-              >
-                {g}
-              </button>
-            ))}
-          </div>
-        </fieldset>
-
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button
-            className="tca-btn-primary"
-            style={{ flex: 1 }}
-            onClick={() => onSave({ campuses, grades, onboarded: true })}
-          >
-            Save
-          </button>
-          {(campuses.length > 0 || grades.length > 0) && (
-            <button
-              className="tca-btn-secondary"
-              onClick={() => { setCampuses([]); setGrades([]); onSave({ campuses: [], grades: [], onboarded: true }) }}
-            >
-              Clear
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function AddToHomePrompt() {
   const [visible, setVisible] = useState(false)
 
@@ -686,23 +472,38 @@ export default function Home() {
   const [streamingStaffCards, setStreamingStaffCards] = useState<StaffCardData[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [trending, setTrending] = useState<string[]>([])
-  const userContext = useSyncExternalStore(subscribeContext, getContextSnapshot, getContextServerSnapshot)
+  const [suggestions, setSuggestions] = useState<string[]>([])
+  const [dismissedCompletion, setDismissedCompletion] = useState('')
   const [showCalendars, setShowCalendars] = useState(false)
-  const [showPreferences, setShowPreferences] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const [lastQuery, setLastQuery] = useState('')
   const abortRef = useRef<AbortController | null>(null)
 
   const hasConversation = exchanges.length > 0 || loading || streamingAnswer !== ''
-  const chips = useMemo(() => buildPersonalizedChips(userContext, trending), [userContext, trending])
+
+  // The completion shown in grey after what's been typed. Matched here rather
+  // than by asking the server on every keystroke: the list is a few kilobytes,
+  // fetched once, and a prefix match over 150 strings is free.
+  const completion = useMemo(() => {
+    if (query.length < 3 || query === dismissedCompletion) return ''
+    // Don't complete mid-word-deletion or after trailing whitespace has been
+    // typed deliberately — it reads as the box arguing with you.
+    if (query !== query.trimStart()) return ''
+    const typed = query.toLowerCase()
+    const match = suggestions.find(s => s.toLowerCase().startsWith(typed) && s.length > query.length)
+    if (!match) return ''
+    const rest = match.slice(query.length)
+    // A completion has to be worth pressing a key for. Offering a lone "?" or a
+    // trailing space is just the box twitching.
+    return /[a-z0-9]/i.test(rest) ? rest : ''
+  }, [query, suggestions, dismissedCompletion])
 
   useEffect(() => {
     const controller = new AbortController()
-    fetch('/api/trending', { signal: controller.signal })
+    fetch('/api/suggestions', { signal: controller.signal })
       .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (d?.chips?.length) setTrending(d.chips) })
-      .catch(() => { /* the defaults are already on screen */ })
+      .then(d => { if (Array.isArray(d?.suggestions)) setSuggestions(d.suggestions) })
+      .catch(() => { /* the box just doesn't complete — no worse than a plain input */ })
     return () => controller.abort()
   }, [])
 
@@ -766,16 +567,11 @@ export default function Home() {
       { role: 'assistant' as const, content: ex.answer },
     ])
 
-    // Campus and grade are attached only to the opening question — after that
-    // the conversation itself carries the context, and repeating the prefix
-    // each turn made the model restate it.
-    const prefixed = history.length === 0 ? `${buildContextPrefix(userContext)}${trimmed}` : trimmed
-
     try {
       const res = await fetch('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: prefixed, rawQuery: trimmed, history }),
+        body: JSON.stringify({ query: trimmed, rawQuery: trimmed, history }),
         signal: controller.signal,
       })
 
@@ -864,11 +660,43 @@ export default function Home() {
     } finally {
       setLoading(false)
     }
-  }, [exchanges, loading, userContext])
+  }, [exchanges, loading])
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     void runSearch(query)
+  }
+
+  const acceptCompletion = useCallback(() => {
+    if (!completion) return
+    setQuery(q => q + completion)
+    inputRef.current?.focus()
+  }, [completion])
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!completion) return
+    const input = e.currentTarget
+    const atEnd = input.selectionStart === query.length && input.selectionEnd === query.length
+
+    // Tab accepts, the way a shell or an address bar does. Right arrow accepts
+    // too, but only from the end of the line — mid-string it's still just a
+    // cursor key.
+    if (e.key === 'Tab' || (e.key === 'ArrowRight' && atEnd)) {
+      e.preventDefault()
+      acceptCompletion()
+      return
+    }
+
+    // Escape puts the suggestion away without clearing what's been typed, and
+    // it stays away until the next keystroke changes the question.
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      setDismissedCompletion(query)
+    }
+
+    // Enter deliberately does nothing here: it submits exactly what is in the
+    // box. Completing on submit would mean a parent who typed a real question
+    // and hit enter gets somebody else's question answered instead.
   }
 
   function handleClarification(lastQuery: string, campus?: string, grade?: string) {
@@ -889,13 +717,6 @@ export default function Home() {
     setLoading(false)
     inputRef.current?.focus()
   }
-
-  function savePreferences(ctx: TcaUserContext) {
-    saveContext(ctx)
-    setShowPreferences(false)
-  }
-
-  const personalized = Boolean(userContext && (userContext.campuses.length || userContext.grades.length))
 
   return (
     <div className="tca-page">
@@ -926,11 +747,26 @@ export default function Home() {
           </div>
 
           <form onSubmit={handleSubmit} className="tca-search-wrap">
+            {/* The completion sits in a layer underneath the input, which is
+                transparent. The typed half is rendered invisibly so the grey
+                half starts at exactly the right x — no measuring, no drift as
+                the font loads. Tapping the grey text accepts it, which is the
+                only way to accept one on a phone. */}
+            <div className="tca-ghost" aria-hidden="true">
+              <span className="tca-ghost-typed">{query}</span>
+              {completion && (
+                <span className="tca-ghost-completion" onClick={acceptCompletion}>
+                  {completion}
+                  <span className="tca-ghost-key">tab</span>
+                </span>
+              )}
+            </div>
             <input
               ref={inputRef}
-              type="search"
+              type="text"
               value={query}
-              onChange={e => setQuery(e.target.value)}
+              onChange={e => { setQuery(e.target.value); setDismissedCompletion('') }}
+              onKeyDown={handleKeyDown}
               onFocus={() => void preloadSanitizer()}
               placeholder={hasConversation ? 'Ask a follow-up…' : 'Ask anything about TCA…'}
               className="tca-search-input"
@@ -941,27 +777,22 @@ export default function Home() {
               enterKeyHint="search"
               maxLength={500}
               aria-label="Ask a question about TCA"
+              aria-autocomplete="inline"
             />
             <button type="submit" disabled={loading || !query.trim()} className="tca-search-btn" aria-label="Search">
               {loading && !streamingAnswer
                 ? <span className="tca-dots" aria-hidden="true"><span /><span /><span /></span>
                 : <SearchIcon />}
             </button>
+            {/* Announced rather than shown, since the grey text is invisible to
+                a screen reader sitting on the input. */}
+            <span className="tca-sr-only" aria-live="polite">
+              {completion ? `Suggestion: ${query}${completion}. Press Tab to accept.` : ''}
+            </span>
           </form>
 
           {!hasConversation && (
             <>
-              {/* These were computed and then never rendered — the trending
-                  request was made on every page load and the result thrown
-                  away. They are the fastest route to an answer on a phone. */}
-              <div className="tca-chip-row" aria-label="Suggested questions">
-                {chips.map(chip => (
-                  <button key={chip} className="tca-chip" onClick={() => void runSearch(chip)} disabled={loading}>
-                    {chip}
-                  </button>
-                ))}
-              </div>
-
               <div className="tca-chip-row">
                 <button className="tca-chip" data-variant="quiet" onClick={() => setShowCalendars(true)}>
                   Calendars &amp; Schedules
@@ -975,9 +806,6 @@ export default function Home() {
                 >
                   Staff Directory
                 </a>
-                <button className="tca-chip" data-variant="quiet" onClick={() => setShowPreferences(true)}>
-                  {personalized ? 'Edit my student' : 'Personalize'}
-                </button>
               </div>
 
               <p className="tca-hint">
@@ -1030,13 +858,6 @@ export default function Home() {
       </main>
 
       {showCalendars && <CalendarPanel onClose={() => setShowCalendars(false)} />}
-      {showPreferences && (
-        <PreferencesPanel
-          initial={userContext}
-          onSave={savePreferences}
-          onClose={() => setShowPreferences(false)}
-        />
-      )}
       <AddToHomePrompt />
 
       <footer className="tca-footer">
