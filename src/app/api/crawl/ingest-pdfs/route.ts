@@ -1,14 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { isCrawlAuthorized } from '@/lib/auth'
 
 export const maxDuration = 300
-
-function isAuthorized(req: NextRequest): boolean {
-  if (req.headers.get('x-vercel-cron') === '1') return true
-  const secret = req.nextUrl.searchParams.get('secret')
-  if (secret === process.env.CRAWL_SECRET) return true
-  return req.headers.get('authorization') === `Bearer ${process.env.CRAWL_SECRET}`
-}
 
 function chunkText(text: string, chunkSize = 1800, overlap = 200): string[] {
   const chunks: string[] = []
@@ -22,7 +16,7 @@ function chunkText(text: string, chunkSize = 1800, overlap = 200): string[] {
 
 // Finds all /fs/resource-manager/view/ links from indexed pages and extracts them as PDFs via Claude
 export async function POST(req: NextRequest) {
-  if (!isAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { VoyageAIClient } = await import('voyageai')
   const { default: Anthropic } = await import('@anthropic-ai/sdk')
@@ -145,6 +139,6 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   return POST(req)
 }

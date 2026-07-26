@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isCrawlAuthorized } from '@/lib/auth'
 
 export const maxDuration = 300
 
@@ -38,8 +39,7 @@ function isBlank(answer: string): boolean {
 }
 
 export async function GET(req: NextRequest) {
-  const secret = req.nextUrl.searchParams.get('secret')
-  if (secret !== process.env.CRAWL_SECRET) {
+  if (!isCrawlAuthorized(req)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 

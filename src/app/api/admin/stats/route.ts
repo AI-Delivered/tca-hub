@@ -1,5 +1,6 @@
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { queryKey } from '@/lib/query-key'
+import { secretMatches } from '@/lib/auth'
 
 export const maxDuration = 30
 
@@ -66,14 +67,24 @@ interface LogRow {
 
 // The dashboard is a speed bump, not a vault — but the check belongs here rather
 // than in the page, so the numbers aren't served to anyone who simply skips the UI.
-// Set ADMIN_PASSWORD in the environment to change it without a deploy.
+//
+// Two changes from the first version. The password no longer falls back to a
+// literal in this file: an unset ADMIN_PASSWORD now closes the door instead of
+// leaving "asdf" as the production password. And it is read from the header
+// only — accepting `?key=` meant the password rode along in Vercel's request
+// logs, in the browser's history, and in the Referer sent to any link clicked
+// from the page.
 function isAuthorized(req: Request): boolean {
-  const expected = process.env.ADMIN_PASSWORD ?? 'asdf'
-  const supplied = req.headers.get('x-admin-key') ?? new URL(req.url).searchParams.get('key')
-  return supplied === expected
+  return secretMatches(req.headers.get('x-admin-key'), process.env.ADMIN_PASSWORD)
 }
 
 export async function GET(req: Request) {
+  if (!process.env.ADMIN_PASSWORD) {
+    // Said out loud rather than as a bare 401, because the difference between
+    // "wrong password" and "nobody set one" is the difference between a typo
+    // and a five-second fix in the Vercel dashboard.
+    return Response.json({ error: 'Dashboard password is not configured — set ADMIN_PASSWORD.' }, { status: 503 })
+  }
   if (!isAuthorized(req)) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -97,11 +108,9 @@ export async function GET(req: Request) {
       .limit(5000),
   ])
 
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 })
-  }
-  if (visitError) {
-    return Response.json({ error: visitError.message }, { status: 500 })
+  if (error || visitError) {
+    console.error('admin stats query failed:', error?.message ?? visitError?.message)
+    return Response.json({ error: 'Could not load analytics.' }, { status: 500 })
   }
 
   const rows = (data ?? []) as LogRow[]

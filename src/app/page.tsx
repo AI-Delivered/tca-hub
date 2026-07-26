@@ -1,15 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
-import Image from 'next/image'
-import { marked } from 'marked'
-
-marked.setOptions({ breaks: true })
-
-const renderer = new marked.Renderer()
-renderer.link = ({ href, title, text }: { href: string; title?: string | null; text: string }) =>
-  `<a href="${href}" target="_blank" rel="noopener noreferrer"${title ? ` title="${title}"` : ''}>${text}</a>`
-marked.use({ renderer })
+import { useState, useEffect, useRef, useCallback, useMemo, useId, useSyncExternalStore } from 'react'
+import { renderAnswer, preloadSanitizer } from '@/lib/markdown'
 
 const SUGGESTIONS = [
   'football schedules',
@@ -71,53 +63,161 @@ interface Exchange {
   staffCards?: StaffCardData[]
 }
 
+/* ── Saved preferences ────────────────────────────────────────────────────
+   Campus and grade live in localStorage and are prepended to the question as
+   a short context line. The system prompt is explicit that it must not say
+   "your student" unless the parent has said which one they have — this is how
+   they say it.
+   ──────────────────────────────────────────────────────────────────────── */
+
+const CONTEXT_KEY = 'tca_context'
+
+function readContext(): TcaUserContext | null {
+  try {
+    const raw = localStorage.getItem(CONTEXT_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<TcaUserContext>
+    // Whatever is in storage is a year-old string written by an older version
+    // of this file, or edited by hand. Only known campuses and grades survive.
+    return {
+      campuses: Array.isArray(parsed.campuses) ? parsed.campuses.filter(c => CAMPUSES.includes(c)) : [],
+      grades: Array.isArray(parsed.grades) ? parsed.grades.filter(g => ALL_GRADES.includes(g)) : [],
+      onboarded: parsed.onboarded === true,
+    }
+  } catch { return null }
+}
+
+// localStorage is an external store, so it is read as one. Reading it in an
+// effect and calling setState meant an extra render on every load; a lazy
+// useState initializer would have meant a hydration mismatch, because the
+// server has no idea which campus this parent picked. useSyncExternalStore
+// handles both: null during hydration, the stored value immediately after.
+const contextListeners = new Set<() => void>()
+let contextCache: TcaUserContext | null | undefined
+
+function subscribeContext(onChange: () => void) {
+  contextListeners.add(onChange)
+  // Another tab changing preferences should update this one.
+  const onStorage = (e: StorageEvent) => {
+    if (e.key !== CONTEXT_KEY) return
+    contextCache = undefined
+    contextListeners.forEach(l => l())
+  }
+  window.addEventListener('storage', onStorage)
+  return () => {
+    contextListeners.delete(onChange)
+    window.removeEventListener('storage', onStorage)
+  }
+}
+
+function getContextSnapshot(): TcaUserContext | null {
+  if (contextCache === undefined) contextCache = readContext()
+  return contextCache
+}
+
+function getContextServerSnapshot(): TcaUserContext | null {
+  return null
+}
+
+function saveContext(ctx: TcaUserContext) {
+  try { localStorage.setItem(CONTEXT_KEY, JSON.stringify(ctx)) } catch { /* private mode */ }
+  contextCache = ctx
+  contextListeners.forEach(l => l())
+}
+
+function inferCampusFromGrade(grade: string): string | null {
+  if (['7th Grade', '8th Grade'].includes(grade)) return 'Junior High'
+  if (['9th Grade', '10th Grade', '11th Grade', '12th Grade'].includes(grade)) return 'High School'
+  return null
+}
+
+function buildContextPrefix(ctx: TcaUserContext | null): string {
+  if (!ctx) return ''
+  const inferred = ctx.grades.map(inferCampusFromGrade).filter((c): c is string => c !== null)
+  const campuses = [...new Set([...ctx.campuses, ...inferred])]
+  const parts: string[] = []
+  if (ctx.grades.length) parts.push(ctx.grades.join(', '))
+  if (campuses.length) parts.push(`at ${campuses.join(' and ')}`)
+  return parts.length ? `[Context: parent of a ${parts.join(' student ')}] ` : ''
+}
+
+/** Chips that read the clock: on a Friday evening, offer the weekend's games. */
+function getTimeAwareChips(): string[] {
+  try {
+    const mt = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Denver' }))
+    const hour = mt.getHours()
+    const day = mt.getDay()
+    if (day === 0 && hour >= 17) return ["What's on the calendar this week?", 'Any practices this week?']
+    if (day === 5 && hour >= 15) return ['Any games this weekend?', 'Friday night schedule']
+    if ((day === 6 || (day === 0 && hour < 15)) && hour < 21) return ['Any games today?', 'Weekend schedule']
+    if (hour >= 6 && hour < 11 && day >= 1 && day <= 5) return ["What's happening today?", 'Any practice today?']
+    if (hour >= 14 && hour < 21 && day >= 1 && day <= 4) return ['Any events tomorrow?', 'Practice tomorrow?']
+  } catch { /* exotic locale */ }
+  return []
+}
+
+function buildPersonalizedChips(ctx: TcaUserContext | null, trending: string[]): string[] {
+  const chips: string[] = [...getTimeAwareChips()]
+
+  if (ctx?.grades.length === 1) {
+    chips.push(`Supply list for ${ctx.grades[0]}`)
+  }
+  if (ctx?.campuses.length === 1) {
+    chips.push(`Bell schedule at ${ctx.campuses[0]}`)
+  }
+
+  const add = (candidate: string) => {
+    if (chips.length >= 4) return
+    if (candidate.length > 42) return
+    if (chips.some(c => c.toLowerCase() === candidate.toLowerCase())) return
+    chips.push(candidate)
+  }
+  trending.forEach(add)
+  DEFAULT_CHIPS.forEach(add)
+  return chips.slice(0, 4)
+}
+
+/* ── Small pieces ─────────────────────────────────────────────────────── */
+
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
   if (!parts.length) return '?'
-  const first = parts[0][0] ?? ''
-  const last = parts.length > 1 ? parts[parts.length - 1][0] : ''
-  return (first + last).toUpperCase()
+  return ((parts[0][0] ?? '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase()
 }
 
 function StaffCard({ card, compact }: { card: StaffCardData; compact: boolean }) {
-  const size = compact ? '56px' : '72px'
   // ~12% of the directory has a placeholder image instead of a headshot — the
   // High School principal among them. A monogram keeps the card (role, campus,
   // email) rather than making those people disappear from results.
   const [imageBroken, setImageBroken] = useState(false)
+  const size = compact ? 56 : 72
   const showPhoto = Boolean(card.photo) && !imageBroken
+
   return (
-    <div data-staff-card style={{
-      display: 'flex', alignItems: 'center', gap: compact ? '12px' : '14px',
-      background: 'var(--surface)', border: '1px solid var(--border)',
-      borderRadius: '14px', padding: '14px 16px',
-    }}>
+    <div className="tca-staff-card" data-staff-card>
       {showPhoto ? (
+        // Intrinsic size is set so the card doesn't reflow when the headshot
+        // arrives, and the load is deferred — a grade level's worth of teachers
+        // is six photos below the fold.
+        // eslint-disable-next-line @next/next/no-img-element
         <img
+          className="tca-staff-photo"
           src={card.photo}
-          alt={card.name}
-          style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, background: 'var(--border)' }}
+          alt=""
+          width={size}
+          height={size}
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
           onError={() => setImageBroken(true)}
         />
       ) : (
-        <div
-          aria-hidden="true"
-          style={{
-            width: size, height: size, borderRadius: '50%', flexShrink: 0,
-            background: 'var(--border)', color: 'var(--navy)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: compact ? '18px' : '23px', fontWeight: 700, letterSpacing: '0.02em',
-          }}
-        >
-          {initials(card.name)}
-        </div>
+        <div className="tca-staff-monogram" aria-hidden="true">{initials(card.name)}</div>
       )}
-      <div style={{ minWidth: 0 }}>
-        <p style={{ fontSize: compact ? '14px' : '15px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1px' }}>{card.name}</p>
-        <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '4px' }}>{card.role} · {card.campus}</p>
-        {card.email && (
-          <a href={`mailto:${card.email}`} style={{ fontSize: '12px', color: 'var(--crimson)', textDecoration: 'none', fontWeight: 500 }}>{card.email}</a>
-        )}
+      <div className="tca-staff-text">
+        <p className="tca-staff-name">{card.name}</p>
+        <p className="tca-staff-role">{card.role} · {card.campus}</p>
+        {card.email && <a className="tca-staff-email" href={`mailto:${card.email}`}>{card.email}</a>}
       </div>
     </div>
   )
@@ -128,11 +228,7 @@ function StaffCards({ cards }: { cards: StaffCardData[] }) {
   if (!cards.length) return null
   const compact = cards.length > 1
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: compact ? 'repeat(auto-fit, minmax(230px, 1fr))' : '1fr',
-      gap: '8px', marginBottom: '10px',
-    }}>
+    <div className="tca-staff-grid" data-compact={compact}>
       {cards.map(card => (
         <StaffCard key={`${card.name}|${card.campus}`} card={card} compact={compact} />
       ))}
@@ -140,124 +236,52 @@ function StaffCards({ cards }: { cards: StaffCardData[] }) {
   )
 }
 
-function loadContext(): TcaUserContext | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = localStorage.getItem('tca_context')
-    return raw ? JSON.parse(raw) : null
-  } catch { return null }
-}
-
-function saveContext(ctx: TcaUserContext) {
-  if (typeof window === 'undefined') return
-  localStorage.setItem('tca_context', JSON.stringify(ctx))
-}
-
-function inferCampusFromGrade(grade: string): string | null {
-  if (['7th Grade', '8th Grade'].includes(grade)) return 'Junior High'
-  if (['9th Grade', '10th Grade', '11th Grade', '12th Grade'].includes(grade)) return 'High School'
-  return null
-}
-
-function buildContextPrefix(ctx: TcaUserContext): string {
-  const grades = ctx.grades
-  const explicitCampuses = ctx.campuses
-  const inferredCampuses = grades
-    .map(inferCampusFromGrade)
-    .filter((c): c is string => c !== null)
-  const allCampuses = [...new Set([...explicitCampuses, ...inferredCampuses])]
-  const parts: string[] = []
-  if (grades.length) parts.push(grades.join(', '))
-  if (allCampuses.length) parts.push(`at ${allCampuses.join(' and ')}`)
-  return parts.length ? `[Context: parent of a ${parts.join(' student ')}] ` : ''
-}
-
-function getTimeAwareChips(): string[] {
-  try {
-    const mtStr = new Date().toLocaleString('en-US', { timeZone: 'America/Denver' })
-    const mt = new Date(mtStr)
-    const hour = mt.getHours()
-    const day = mt.getDay() // 0=Sun, 6=Sat
-    // Sunday evening → week ahead
-    if (day === 0 && hour >= 17) return ["What's on the calendar this week?", "Any practices this week?"]
-    // Friday evening or weekend daytime → game weekend
-    if (day === 5 && hour >= 15) return ["Any games this weekend?", "Friday night schedule"]
-    if ((day === 6 || (day === 0 && hour < 15)) && hour < 21) return ["Any games today?", "Weekend schedule"]
-    // Weekday morning → today's events
-    if (hour >= 6 && hour < 11 && day >= 1 && day <= 5) return ["What's happening today?", "Any practice today?"]
-    // Weekday afternoon/evening → tomorrow
-    if (hour >= 14 && hour < 21 && day >= 1 && day <= 4) return ["Any events tomorrow?", "Practice tomorrow?"]
-  } catch { /* ignore */ }
-  return []
-}
-
-function buildPersonalizedChips(ctx: TcaUserContext | null, trending: string[]): string[] {
-  const chips: string[] = []
-
-  // Time-aware chips always go first
-  chips.push(...getTimeAwareChips())
-
-  if (ctx) {
-    if (ctx.grades.length === 1) {
-      chips.push(`Spelling list for ${ctx.grades[0]}`)
-      chips.push(`Supply list for ${ctx.grades[0]}`)
-    }
-    if (ctx.campuses.length === 1) {
-      chips.push(`Bell schedule at ${ctx.campuses[0]}`)
-    }
-  }
-
-  for (const t of trending) {
-    if (chips.length >= 4) break
-    if (t.length > 40) continue
-    if (!chips.some(c => c.toLowerCase() === t.toLowerCase())) chips.push(t)
-  }
-  for (const d of DEFAULT_CHIPS) {
-    if (chips.length >= 4) break
-    if (!chips.some(c => c.toLowerCase() === d.toLowerCase())) chips.push(d)
-  }
-  return chips.slice(0, 4)
-}
-
+/** The typing headline. One self-scheduling timer driven by refs, so a
+ *  character does not re-create the effect, the callback and the timeout. */
 function CyclingText() {
-  const [displayText, setDisplayText] = useState('')
-  const [suggestionIndex, setSuggestionIndex] = useState(0)
-  const [phase, setPhase] = useState<'typing' | 'pause' | 'erasing'>('typing')
-  const frameRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const tick = useCallback(() => {
-    const current = SUGGESTIONS[suggestionIndex]
-    if (phase === 'typing') {
-      if (displayText.length < current.length) {
-        setDisplayText(current.slice(0, displayText.length + 1))
-        frameRef.current = setTimeout(tick, 55)
-      } else {
-        setPhase('pause')
-        frameRef.current = setTimeout(tick, 2400)
-      }
-    } else if (phase === 'pause') {
-      setPhase('erasing')
-      frameRef.current = setTimeout(tick, 40)
-    } else {
-      if (displayText.length > 0) {
-        setDisplayText(displayText.slice(0, -4))
-        frameRef.current = setTimeout(tick, 0)
-      } else {
-        setSuggestionIndex(i => (i + 1) % SUGGESTIONS.length)
-        setPhase('typing')
-        frameRef.current = setTimeout(tick, 300)
-      }
-    }
-  }, [displayText, suggestionIndex, phase])
+  const [text, setText] = useState('')
+  const state = useRef({ index: 0, chars: 0, phase: 'typing' as 'typing' | 'pause' | 'erasing' })
 
   useEffect(() => {
-    frameRef.current = setTimeout(tick, 120)
-    return () => { if (frameRef.current) clearTimeout(frameRef.current) }
-  }, [tick])
+    let timer: ReturnType<typeof setTimeout>
+
+    // Reduced motion gets the phrase, not the typewriter.
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      timer = setTimeout(() => setText(SUGGESTIONS[0]), 0)
+      return () => clearTimeout(timer)
+    }
+
+    const tick = () => {
+      const s = state.current
+      const word = SUGGESTIONS[s.index]
+      let delay = 55
+
+      if (s.phase === 'typing') {
+        if (s.chars < word.length) s.chars++
+        else { s.phase = 'pause'; delay = 2400 }
+      } else if (s.phase === 'pause') {
+        s.phase = 'erasing'
+        delay = 40
+      } else if (s.chars > 0) {
+        s.chars = Math.max(0, s.chars - 4)
+        delay = 16
+      } else {
+        s.index = (s.index + 1) % SUGGESTIONS.length
+        s.phase = 'typing'
+        delay = 300
+      }
+
+      setText(word.slice(0, s.chars))
+      timer = setTimeout(tick, delay)
+    }
+
+    timer = setTimeout(tick, 120)
+    return () => clearTimeout(timer)
+  }, [])
 
   return (
     <span style={{ display: 'inline-block', maxWidth: '100%', verticalAlign: 'bottom' }}>
-      <span style={{ color: 'var(--crimson)' }}>{displayText}</span>
+      <span style={{ color: 'var(--crimson)' }}>{text}</span>
       <span className="tca-cycle-cursor" aria-hidden="true" />
     </span>
   )
@@ -266,160 +290,188 @@ function CyclingText() {
 function SearchIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <circle cx="6.5" cy="6.5" r="4.5" stroke="white" strokeWidth="1.5" />
-      <path d="M10 10L13.5 13.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M10 10L13.5 13.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   )
 }
 
-function PullToRefresh() {
-  const [pull, setPull] = useState(0)
-  const startY = useRef(0)
-  const pullRef = useRef(0)
-  const THRESHOLD = 80
+/** Escape closes, focus moves in and comes back, and the rest of the page is
+ *  hidden from assistive technology while the dialog is open. */
+function useDialog(onClose: () => void) {
+  const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const onStart = (e: TouchEvent) => {
-      if (window.scrollY === 0) startY.current = e.touches[0].clientY
-      else startY.current = 0
-    }
-    const onMove = (e: TouchEvent) => {
-      if (!startY.current) return
-      const dist = e.touches[0].clientY - startY.current
-      if (dist > 0) {
-        const clamped = Math.min(dist * 0.45, THRESHOLD + 20)
-        pullRef.current = clamped
-        setPull(clamped)
-      }
-    }
-    const onEnd = () => {
-      if (pullRef.current >= THRESHOLD) {
-        window.location.reload()
-      } else {
-        pullRef.current = 0
-        setPull(0)
-        startY.current = 0
-      }
-    }
-    document.addEventListener('touchstart', onStart, { passive: true })
-    document.addEventListener('touchmove', onMove, { passive: true })
-    document.addEventListener('touchend', onEnd)
-    return () => {
-      document.removeEventListener('touchstart', onStart)
-      document.removeEventListener('touchmove', onMove)
-      document.removeEventListener('touchend', onEnd)
-    }
-  }, [])
+    const previouslyFocused = document.activeElement as HTMLElement | null
+    const node = ref.current
+    node?.querySelector<HTMLElement>('[data-autofocus], button, [href], input, select')?.focus()
 
-  if (pull < 6) return null
-  const progress = Math.min(pull / THRESHOLD, 1)
-  const ready = pull >= THRESHOLD
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose(); return }
+      if (e.key !== 'Tab' || !node) return
+
+      const focusable = [...node.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+        .filter(el => !el.hasAttribute('disabled'))
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = prevOverflow
+      previouslyFocused?.focus?.()
+    }
+  }, [onClose])
+
+  return ref
+}
+
+const CALENDARS = [
+  { label: 'TCA Athletics', desc: 'Games, meets, and tournaments — all sports', ical: 'https://gobound.com/co/schools/theclassahs/calendar/ical/f4c41b333289444' },
+  { label: 'East Elementary', desc: 'Events, holidays, and early outs for East', ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,8,3' },
+  { label: 'Central Elementary', desc: 'Events, holidays, and early outs for Central', ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=2' },
+  { label: 'North Elementary', desc: 'Events, holidays, and early outs for North', ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,5' },
+  { label: 'Junior High', desc: 'JH events, schedules, and campus dates', ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=10' },
+  { label: 'High School', desc: 'HS events, schedules, and campus dates', ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=12' },
+  { label: 'College Pathways', desc: 'CP events and campus dates', ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=11,4' },
+]
+
+function CalendarPanel({ onClose }: { onClose: () => void }) {
+  const ref = useDialog(onClose)
+  const titleId = useId()
 
   return (
-    <div style={{
-      position: 'fixed', top: 0, left: 0, right: 0, zIndex: 5000,
-      display: 'flex', justifyContent: 'center',
-      paddingTop: `calc(env(safe-area-inset-top, 0px) + ${Math.max(pull * 0.5, 12)}px)`,
-      pointerEvents: 'none',
-    }}>
-      <div style={{
-        width: 34, height: 34, borderRadius: '50%',
-        background: ready ? 'var(--crimson)' : 'var(--navy)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        opacity: Math.min(progress * 1.5, 1),
-        transform: `scale(${0.5 + progress * 0.5})`,
-        transition: 'background 0.2s, transform 0.1s',
-        boxShadow: '0 2px 16px rgba(0,0,0,0.2)',
-      }}>
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
-          style={{ transform: `rotate(${progress * 270}deg)`, transition: 'transform 0.05s' }}>
-          <path d="M8 2a6 6 0 1 0 6 6" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-          <path d="M14 3.5V1.5h-2" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
+    <div className="tca-scrim" data-align="bottom" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="tca-dialog" ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <div className="tca-dialog-head">
+          <h2 className="tca-dialog-title" id={titleId}>Calendars &amp; Schedules</h2>
+          <button className="tca-dialog-close" onClick={onClose} aria-label="Close calendars" data-autofocus>
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <path d="M4.5 4.5l9 9M13.5 4.5l-9 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+
+        <a
+          className="tca-btn-primary"
+          style={{ display: 'block', textAlign: 'center', textDecoration: 'none', marginBottom: 14 }}
+          href="https://www.tcatitans.org/calendar"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          View the full TCA calendar →
+        </a>
+
+        <p className="tca-dialog-sub" style={{ marginBottom: 14 }}>
+          Subscribe to add a TCA calendar to Apple Calendar or Google Calendar — it stays up to date on its own.
+        </p>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {CALENDARS.map(cal => {
+            const webcal = cal.ical.replace(/^https?:/, 'webcal:')
+            const google = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}`
+            return (
+              <div className="tca-cal-row" key={cal.label}>
+                <p className="tca-staff-name" style={{ fontSize: 14, fontWeight: 600 }}>{cal.label}</p>
+                <p className="tca-staff-role" style={{ marginBottom: 10 }}>{cal.desc}</p>
+                <div className="tca-cal-actions">
+                  <a className="tca-cal-btn" href={webcal}>Apple Calendar</a>
+                  <a className="tca-cal-btn" href={google} target="_blank" rel="noopener noreferrer">Google Calendar</a>
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </div>
     </div>
   )
 }
 
-const CALENDARS = [
-  {
-    label: 'TCA Athletics',
-    desc: 'Games, meets, and tournaments — all sports',
-    ical: 'https://gobound.com/co/schools/theclassahs/calendar/ical/f4c41b333289444',
-  },
-  {
-    label: 'East Elementary',
-    desc: 'Events, holidays, and early outs for East',
-    ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,8,3',
-  },
-  {
-    label: 'Central Elementary',
-    desc: 'Events, holidays, and early outs for Central',
-    ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=2',
-  },
-  {
-    label: 'North Elementary',
-    desc: 'Events, holidays, and early outs for North',
-    ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,5',
-  },
-  {
-    label: 'Junior High',
-    desc: 'JH events, schedules, and campus dates',
-    ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=10',
-  },
-  {
-    label: 'High School',
-    desc: 'HS events, schedules, and campus dates',
-    ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=12',
-  },
-  {
-    label: 'College Pathways',
-    desc: 'CP events and campus dates',
-    ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=11,4',
-  },
-]
+function PreferencesPanel({ initial, onSave, onClose }: {
+  initial: TcaUserContext | null
+  onSave: (ctx: TcaUserContext) => void
+  onClose: () => void
+}) {
+  const ref = useDialog(onClose)
+  const titleId = useId()
+  const [campuses, setCampuses] = useState<string[]>(initial?.campuses ?? [])
+  const [grades, setGrades] = useState<string[]>(initial?.grades ?? [])
 
-function CalendarPanel({ onClose }: { onClose: () => void }) {
+  const toggle = <T,>(arr: T[], val: T): T[] => (arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val])
+
   return (
-    <div
-      style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: '0 16px max(20px, env(safe-area-inset-bottom, 20px))' }}
-      onClick={e => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '20px', width: '100%', maxWidth: '480px', padding: '24px 20px 28px', maxHeight: '85vh', overflowY: 'auto' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
-          <h2 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>Calendars & Schedules</h2>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: '20px', cursor: 'pointer', padding: '0', lineHeight: 1 }}>✕</button>
+    <div className="tca-scrim" data-align="center" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="tca-dialog" ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <div className="tca-dialog-head">
+          <div>
+            <h2 className="tca-dialog-title" id={titleId}>Who are you asking for?</h2>
+            <p className="tca-dialog-sub">
+              Answers get tailored to your student&apos;s campus and grade. Saved on this device only, and you can change it any time.
+            </p>
+          </div>
+          <button className="tca-dialog-close" onClick={onClose} aria-label="Close preferences">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <path d="M4.5 4.5l9 9M13.5 4.5l-9 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </button>
         </div>
-        <a
-          href="https://www.tcatitans.org/calendar"
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ display: 'block', background: 'var(--crimson)', color: '#fff', borderRadius: '10px', padding: '11px 14px', textDecoration: 'none', marginBottom: '14px', fontSize: '13px', fontWeight: 600 }}
-        >
-          View full TCA calendar on tcatitans.org →
-        </a>
-        <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '14px', lineHeight: 1.5 }}>
-          Subscribe to add TCA calendars directly to Apple Calendar or Google Calendar — they stay up to date automatically.
-        </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {CALENDARS.map(cal => {
-            const webcal = cal.ical.replace(/^https?:/, 'webcal:')
-            const google = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}`
-            return (
-              <div key={cal.label} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px 14px' }}>
-                <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '2px' }}>{cal.label}</p>
-                <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '10px' }}>{cal.desc}</p>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <a href={webcal} style={{ flex: 1, textAlign: 'center', padding: '7px 10px', borderRadius: '8px', background: 'rgba(255,255,255,0.08)', border: '1px solid var(--border)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 600, textDecoration: 'none' }}>
-                    Apple Calendar
-                  </a>
-                  <a href={google} target="_blank" rel="noopener noreferrer" style={{ flex: 1, textAlign: 'center', padding: '7px 10px', borderRadius: '8px', background: 'rgba(255,255,255,0.08)', border: '1px solid var(--border)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 600, textDecoration: 'none' }}>
-                    Google Calendar
-                  </a>
-                </div>
-              </div>
-            )
-          })}
+
+        <fieldset style={{ border: 0, padding: 0, margin: '0 0 20px' }}>
+          <legend className="tca-field-label">Campus</legend>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {CAMPUSES.map(c => (
+              <button
+                key={c}
+                type="button"
+                className="tca-toggle"
+                aria-pressed={campuses.includes(c)}
+                onClick={() => setCampuses(prev => toggle(prev, c))}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+
+        <fieldset style={{ border: 0, padding: 0, margin: '0 0 26px' }}>
+          <legend className="tca-field-label">Grade</legend>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {ALL_GRADES.map(g => (
+              <button
+                key={g}
+                type="button"
+                className="tca-toggle"
+                aria-pressed={grades.includes(g)}
+                onClick={() => setGrades(prev => toggle(prev, g))}
+              >
+                {g}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            className="tca-btn-primary"
+            style={{ flex: 1 }}
+            onClick={() => onSave({ campuses, grades, onboarded: true })}
+          >
+            Save
+          </button>
+          {(campuses.length > 0 || grades.length > 0) && (
+            <button
+              className="tca-btn-secondary"
+              onClick={() => { setCampuses([]); setGrades([]); onSave({ campuses: [], grades: [], onboarded: true }) }}
+            >
+              Clear
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -432,112 +484,40 @@ function AddToHomePrompt() {
   useEffect(() => {
     const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent)
     const isStandalone = (navigator as { standalone?: boolean }).standalone === true
-    const dismissed = localStorage.getItem('tca_a2hs')
-    if (isIos && !isStandalone && !dismissed) {
-      const t = setTimeout(() => setVisible(true), 2000)
-      return () => clearTimeout(t)
-    }
+    if (!isIos || isStandalone) return
+    try { if (localStorage.getItem('tca_a2hs')) return } catch { return }
+    const t = setTimeout(() => setVisible(true), 4000)
+    return () => clearTimeout(t)
   }, [])
-
-  function dismiss() {
-    setVisible(false)
-    localStorage.setItem('tca_a2hs', '1')
-  }
 
   if (!visible) return null
 
-  return (
-    <div style={{
-      position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 4000,
-      padding: '0 16px max(20px, env(safe-area-inset-bottom, 20px))',
-      animation: 'slideUp 0.35s cubic-bezier(0.4,0,0.2,1)',
-    }}>
-      <div style={{
-        background: '#1a2d5a', borderRadius: '16px', padding: '16px 18px',
-        display: 'flex', alignItems: 'flex-start', gap: '12px',
-        boxShadow: '0 8px 40px rgba(0,0,0,0.3)',
-      }}>
-        <div style={{ flex: 1 }}>
-          <p style={{ color: '#fff', fontWeight: 600, fontSize: '14px', marginBottom: '4px' }}>
-            Add TCA Hub to your home screen
-          </p>
-          <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: '13px', lineHeight: 1.45 }}>
-            Tap the <strong style={{ color: '#fff' }}>Share</strong> button at the bottom of your screen, then <strong style={{ color: '#fff' }}>"Add to Home Screen."</strong>
-          </p>
-        </div>
-        <button onClick={dismiss} style={{ color: 'rgba(255,255,255,0.5)', background: 'none', border: 'none', fontSize: '20px', lineHeight: 1, cursor: 'pointer', padding: '0', flexShrink: 0, marginTop: '1px' }}>✕</button>
-      </div>
-    </div>
-  )
-}
-
-function OnboardingModal({ onSave, onSkip }: { onSave: (ctx: TcaUserContext) => void; onSkip: () => void }) {
-  const [selectedCampuses, setSelectedCampuses] = useState<string[]>([])
-  const [selectedGrades, setSelectedGrades] = useState<string[]>([])
-
-  function toggle<T>(arr: T[], val: T): T[] {
-    return arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val]
+  function dismiss() {
+    setVisible(false)
+    try { localStorage.setItem('tca_a2hs', '1') } catch { /* private mode */ }
   }
 
-  const chipStyle = (active: boolean): React.CSSProperties => ({
-    padding: '6px 12px',
-    borderRadius: '20px',
-    border: `1px solid ${active ? 'var(--crimson)' : 'rgba(255,255,255,0.14)'}`,
-    background: active ? 'rgba(185,28,58,0.12)' : 'rgba(255,255,255,0.04)',
-    color: active ? 'var(--text-primary)' : 'var(--text-dim)',
-    fontSize: '13px',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    transition: 'all 0.15s',
-    whiteSpace: 'nowrap' as const,
-  })
-
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
-      onClick={e => { if (e.target === e.currentTarget) onSkip() }}>
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '16px', width: '100%', maxWidth: '480px', padding: '28px', boxShadow: '0 24px 80px rgba(0,0,0,0.5)' }}>
-        <div style={{ marginBottom: '20px' }}>
-          <p style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--crimson)', fontWeight: 600, marginBottom: '6px' }}>Personalize</p>
-          <h2 style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>Which campus are you at?</h2>
-          <p style={{ fontSize: '13px', color: 'var(--text-dim)', lineHeight: 1.5 }}>Answers will be tailored to your student. You can update this anytime.</p>
+    <div className="tca-a2hs" role="complementary" aria-label="Install TCA Hub">
+      <div className="tca-a2hs-inner">
+        <div style={{ flex: 1 }}>
+          <p style={{ color: '#fff', fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
+            Add TCA Hub to your home screen
+          </p>
+          <p style={{ color: 'rgba(255,255,255,0.78)', fontSize: 13, lineHeight: 1.45 }}>
+            Tap <strong style={{ color: '#fff' }}>Share</strong> at the bottom of the screen, then{' '}
+            <strong style={{ color: '#fff' }}>Add to Home Screen</strong>.
+          </p>
         </div>
-
-        <div style={{ marginBottom: '20px' }}>
-          <p style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-dim)', fontWeight: 600, marginBottom: '10px' }}>Campus</p>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-            {CAMPUSES.map(c => (
-              <button key={c} style={chipStyle(selectedCampuses.includes(c))} onClick={() => setSelectedCampuses(prev => toggle(prev, c))}>
-                {c}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ marginBottom: '28px' }}>
-          <p style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-dim)', fontWeight: 600, marginBottom: '10px' }}>Grade</p>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-            {ALL_GRADES.map(g => (
-              <button key={g} style={chipStyle(selectedGrades.includes(g))} onClick={() => setSelectedGrades(prev => toggle(prev, g))}>
-                {g}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button
-            onClick={() => onSave({ campuses: selectedCampuses, grades: selectedGrades, onboarded: true })}
-            style={{ flex: 1, padding: '10px 20px', borderRadius: '10px', border: 'none', background: 'var(--crimson)', color: '#fff', fontSize: '14px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
-          >
-            Save preferences
-          </button>
-          <button
-            onClick={onSkip}
-            style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-dim)', fontSize: '14px', cursor: 'pointer', fontFamily: 'inherit' }}
-          >
-            Skip
-          </button>
-        </div>
+        <button
+          onClick={dismiss}
+          aria-label="Dismiss"
+          style={{ color: 'rgba(255,255,255,0.7)', background: 'none', border: 'none', cursor: 'pointer', padding: 4, flexShrink: 0 }}
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <path d="M4.5 4.5l9 9M13.5 4.5l-9 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </button>
       </div>
     </div>
   )
@@ -555,18 +535,35 @@ function SourcesPanel({ sources }: { sources: Source[] }) {
             const u = new URL(source.url)
             const host = u.hostname.replace('www.', '')
             const path = u.pathname.split('/').filter(Boolean)
-            if (path.length <= 1) return host
-            return host + '/' + path.slice(0, 2).join('/')
+            return path.length <= 1 ? host : `${host}/${path.slice(0, 2).join('/')}`
           } catch { return source.url }
         })()
         return (
           <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" className="tca-source-link">
-            <span className="tca-source-num">0{i + 1}</span>
+            <span className="tca-source-num" aria-hidden="true">0{i + 1}</span>
             <span>{label}</span>
           </a>
         )
       })}
     </div>
+  )
+}
+
+function CopyAnswerButton({ answer }: { answer: string }) {
+  const [copied, setCopied] = useState(false)
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(answer)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch { /* clipboard blocked — nothing useful to say about it */ }
+  }
+
+  return (
+    <button className="tca-icon-btn" onClick={copy} aria-live="polite">
+      {copied ? 'Copied' : 'Copy'}
+    </button>
   )
 }
 
@@ -583,19 +580,23 @@ function AnswerCard({
   onClarify?: (campus?: string, grade?: string) => void
   onFollowUp?: (opt: string) => void
 }) {
-  function getClarificationNeeds(text: string) {
-    if (!text.includes('?')) return { needsCampus: false, needsGrade: false }
-    const lower = text.toLowerCase()
+  // Parsing markdown is not free, and this used to run on every streamed token —
+  // a full re-parse and re-sanitise of the whole answer, dozens of times a
+  // second, while the text was still growing.
+  const html = useMemo(() => renderAnswer(answer), [answer])
+
+  const { needsCampus, needsGrade } = useMemo(() => {
+    if (!answer.includes('?')) return { needsCampus: false, needsGrade: false }
+    const lower = answer.toLowerCase()
     return {
       needsCampus: /which campus|what campus|campus\?|campus or grade/.test(lower),
       needsGrade: /which grade|what grade|grade\?|campus or grade/.test(lower),
     }
-  }
+  }, [answer])
 
-  function getFollowUpOptions(text: string): string[] {
-    const { needsCampus, needsGrade } = getClarificationNeeds(text)
-    if (needsCampus || needsGrade || !text.includes('?')) return []
-    const lower = text.toLowerCase()
+  const followUpOpts = useMemo(() => {
+    if (needsCampus || needsGrade || !answer.includes('?')) return []
+    const lower = answer.toLowerCase()
     const campusMap: [string, string][] = [
       ['central', 'Central Elementary'], ['east', 'East Elementary'],
       ['north', 'North Elementary'], ['junior high', 'Junior High'],
@@ -608,58 +609,47 @@ function AnswerCard({
       if (lower.includes(kw) && !seen.has(label)) { seen.add(label); results.push(label) }
     }
     return results
-  }
-
-  const { needsCampus, needsGrade } = getClarificationNeeds(answer)
-  const followUpOpts = getFollowUpOptions(answer)
-
-  const selectStyle: React.CSSProperties = {
-    width: '100%', padding: '8px 36px 8px 12px', borderRadius: '8px',
-    border: '1px solid rgba(255,255,255,0.14)', background: 'rgba(255,255,255,0.07)',
-    color: 'var(--text)', fontSize: '14px', fontFamily: 'inherit', cursor: 'pointer',
-    appearance: 'none',
-    backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2 4l4 4 4-4' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E")`,
-    backgroundRepeat: 'no-repeat', backgroundPosition: 'right 10px center', lineHeight: '1.4',
-  }
+  }, [answer, needsCampus, needsGrade])
 
   return (
-    <div className="tca-answer-card">
+    <div className="tca-answer-card" data-streaming={isStreaming}>
       <div className="tca-answer-meta">
-        <div className="tca-answer-pulse" style={{ animation: isStreaming ? undefined : 'none', opacity: isStreaming ? undefined : 0.5 }} />
+        <div className="tca-answer-pulse" />
         <span className="tca-answer-label">{isStreaming && !answer ? 'Thinking…' : 'Answer'}</span>
       </div>
 
-      <div className="tca-answer-body">
+      {/* The answer is announced once it settles rather than character by
+          character, which is why this is polite and not assertive. */}
+      <div className="tca-answer-body" aria-live="polite" aria-busy={isStreaming}>
         {answer ? (
-          <span dangerouslySetInnerHTML={{
-            __html: (marked.parse(answer) as string)
-              .replace(/(\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4})/g, '<a href="tel:$1">$1</a>')
-          }} />
+          <span dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
-          <div className="tca-dots"><span /><span /><span /></div>
+          <span className="tca-dots" role="status" aria-label="Thinking"><span /><span /><span /></span>
         )}
-        {/* Streaming cursor */}
-        {isStreaming && answer && (
-          <span className="tca-cycle-cursor" aria-hidden="true" style={{ marginLeft: '1px' }} />
-        )}
+        {isStreaming && answer && <span className="tca-cycle-cursor" aria-hidden="true" style={{ marginLeft: 1 }} />}
       </div>
 
-      {/* Clarification pickers — only when not streaming */}
+      {!isStreaming && answer && (
+        <div className="tca-answer-actions">
+          <CopyAnswerButton answer={answer} />
+        </div>
+      )}
+
       {!isStreaming && onClarify && (needsCampus || needsGrade) && (
-        <div style={{ margin: '0 22px 16px', paddingTop: '14px', borderTop: '1px solid rgba(255,255,255,0.08)', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+        <div className="tca-clarify">
           {needsGrade && (
-            <div style={{ flex: 1, minWidth: '140px' }}>
-              <label style={{ display: 'block', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-dim)', marginBottom: '5px' }}>Grade</label>
-              <select style={selectStyle} defaultValue="" onChange={e => e.target.value && onClarify(undefined, e.target.value)}>
+            <div>
+              <label htmlFor="clarify-grade">Grade</label>
+              <select id="clarify-grade" className="tca-select" defaultValue="" onChange={e => e.target.value && onClarify(undefined, e.target.value)}>
                 <option value="" disabled>Select grade…</option>
                 {ALL_GRADES.map(g => <option key={g} value={g}>{g}</option>)}
               </select>
             </div>
           )}
           {needsCampus && (
-            <div style={{ flex: 1, minWidth: '160px' }}>
-              <label style={{ display: 'block', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-dim)', marginBottom: '5px' }}>Campus</label>
-              <select style={selectStyle} defaultValue="" onChange={e => e.target.value && onClarify(e.target.value)}>
+            <div>
+              <label htmlFor="clarify-campus">Campus</label>
+              <select id="clarify-campus" className="tca-select" defaultValue="" onChange={e => e.target.value && onClarify(e.target.value)}>
                 <option value="" disabled>Select campus…</option>
                 {CAMPUSES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -668,14 +658,13 @@ function AnswerCard({
         </div>
       )}
 
-      {/* Follow-up options */}
       {!isStreaming && onFollowUp && followUpOpts.length > 0 && (
         <div className="tca-followup-panel">
           {followUpOpts.map(opt => (
             <button key={opt} className="tca-followup-chip" onClick={() => onFollowUp(opt)}>
               {opt}
               <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-                <path d="M2 6h8M8 3l3 3-3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M2 6h8M8 3l3 3-3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </button>
           ))}
@@ -687,6 +676,8 @@ function AnswerCard({
   )
 }
 
+/* ── Page ─────────────────────────────────────────────────────────────── */
+
 export default function Home() {
   const [query, setQuery] = useState('')
   const [exchanges, setExchanges] = useState<Exchange[]>([])
@@ -695,58 +686,74 @@ export default function Home() {
   const [streamingStaffCards, setStreamingStaffCards] = useState<StaffCardData[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [isFocused, setIsFocused] = useState(false)
-  const [chips, setChips] = useState<string[]>(DEFAULT_CHIPS)
+  const [trending, setTrending] = useState<string[]>([])
+  const userContext = useSyncExternalStore(subscribeContext, getContextSnapshot, getContextServerSnapshot)
   const [showCalendars, setShowCalendars] = useState(false)
+  const [showPreferences, setShowPreferences] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const [lastQuery, setLastQuery] = useState('')
+  const abortRef = useRef<AbortController | null>(null)
 
   const hasConversation = exchanges.length > 0 || loading || streamingAnswer !== ''
-  const displayChips = buildPersonalizedChips(null, chips)
+  const chips = useMemo(() => buildPersonalizedChips(userContext, trending), [userContext, trending])
 
   useEffect(() => {
-    const STALE_MS = 30 * 60 * 1000
-    const key = 'tca_last_active'
-    const mark = () => sessionStorage.setItem(key, Date.now().toString())
-    const check = () => {
-      const last = parseInt(sessionStorage.getItem(key) ?? '0')
-      if (last && Date.now() - last > STALE_MS) window.location.reload()
-      mark()
-    }
-    mark()
-    window.addEventListener('focus', check)
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check() })
-    return () => window.removeEventListener('focus', check)
+    const controller = new AbortController()
+    fetch('/api/trending', { signal: controller.signal })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d?.chips?.length) setTrending(d.chips) })
+      .catch(() => { /* the defaults are already on screen */ })
+    return () => controller.abort()
   }, [])
 
   useEffect(() => {
-    fetch('/api/trending')
-      .then(r => r.json())
-      .then(d => { if (d.chips?.length) setChips(d.chips) })
-      .catch(() => {})
-  }, [])
+    let visitorId: string | null = null
+    try {
+      visitorId = localStorage.getItem('tca_visitor_id')
+      if (!visitorId) {
+        visitorId = crypto.randomUUID()
+        localStorage.setItem('tca_visitor_id', visitorId)
+      }
+    } catch { /* private mode — the visit is counted without an id */ }
 
-  useEffect(() => {
-    let visitorId = localStorage.getItem('tca_visitor_id')
-    if (!visitorId) {
-      visitorId = crypto.randomUUID()
-      localStorage.setItem('tca_visitor_id', visitorId)
-    }
     const payload = JSON.stringify({ path: window.location.pathname, referrer: document.referrer || null, visitorId })
     const blob = new Blob([payload], { type: 'application/json' })
     if (!navigator.sendBeacon('/api/track-visit', blob)) {
-      fetch('/api/track-visit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload, keepalive: true }).catch(() => {})
+      fetch('/api/track-visit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+        keepalive: true,
+      }).catch(() => {})
     }
   }, [])
 
-  async function handleSearch(e: React.FormEvent, overrideQuery?: string) {
-    e.preventDefault()
-    const rawQ = (overrideQuery ?? query).trim()
-    if (!rawQ || loading) return
+  // "/" focuses the search box the way it does everywhere else on the web.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return
+      const el = document.activeElement
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return
+      e.preventDefault()
+      inputRef.current?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
-    const q = rawQ
+  const runSearch = useCallback(async (rawQ: string) => {
+    const trimmed = rawQ.trim()
+    if (!trimmed || loading) return
 
-    if (overrideQuery) setQuery(overrideQuery)
+    setLastQuery(trimmed)
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    // The sanitizer is fetched here rather than on mount: a visitor who lands
+    // and leaves never pays for it, and for everyone else it arrives long
+    // before the first token does.
+    void preloadSanitizer()
 
     setLoading(true)
     setError('')
@@ -754,22 +761,29 @@ export default function Home() {
     setStreamingSources([])
     setStreamingStaffCards([])
 
-    // Build conversation history from prior exchanges (clean text, no context prefix)
     const history = exchanges.flatMap(ex => [
       { role: 'user' as const, content: ex.query },
       { role: 'assistant' as const, content: ex.answer },
     ])
 
+    // Campus and grade are attached only to the opening question — after that
+    // the conversation itself carries the context, and repeating the prefix
+    // each turn made the model restate it.
+    const prefixed = history.length === 0 ? `${buildContextPrefix(userContext)}${trimmed}` : trimmed
+
     try {
       const res = await fetch('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q, rawQuery: rawQ, history }),
+        body: JSON.stringify({ query: prefixed, rawQuery: trimmed, history }),
+        signal: controller.signal,
       })
 
+      if (res.status === 429) {
+        throw new Error('That was a lot of questions at once — give it a minute and try again.')
+      }
       if (!res.ok || !res.body) {
-        const data = await res.json().catch(() => ({}))
-        throw new Error((data as { error?: string }).error ?? 'Search failed')
+        throw new Error('Search is having a moment. Try again?')
       }
 
       const reader = res.body.getReader()
@@ -778,6 +792,20 @@ export default function Home() {
       let finalAnswer = ''
       let finalSources: Source[] = []
       let finalStaffCards: StaffCardData[] = []
+
+      // Tokens arrive far faster than a screen can usefully repaint. They're
+      // collected here and flushed on an animation frame, so React renders (and
+      // the markdown is parsed) at most once per frame instead of once per
+      // token — the same text, a fraction of the work.
+      let pending = ''
+      let frame: number | null = null
+      const flush = () => {
+        frame = null
+        if (!pending) return
+        const chunk = pending
+        pending = ''
+        setStreamingAnswer(prev => prev + chunk)
+      }
 
       while (true) {
         const { done, value } = await reader.read()
@@ -799,7 +827,8 @@ export default function Home() {
               setStreamingStaffCards(event.staffCards)
             } else if (event.type === 'text' && event.text) {
               finalAnswer += event.text
-              setStreamingAnswer(prev => prev + event.text)
+              pending += event.text
+              frame ??= requestAnimationFrame(flush)
             } else if (event.type === 'error') {
               // The server sends a sanitized reason; never render a raw API
               // message to a parent regardless of what arrives here.
@@ -811,38 +840,46 @@ export default function Home() {
         }
       }
 
+      if (frame !== null) cancelAnimationFrame(frame)
+      flush()
+
       if (finalAnswer) {
-        setExchanges(prev => [...prev, { query: rawQ, answer: finalAnswer, sources: finalSources, staffCards: finalStaffCards.length ? finalStaffCards : undefined }])
+        setExchanges(prev => [...prev, {
+          query: trimmed,
+          answer: finalAnswer,
+          sources: finalSources,
+          staffCards: finalStaffCards.length ? finalStaffCards : undefined,
+        }])
       }
       setStreamingAnswer('')
       setStreamingSources([])
       setStreamingStaffCards([])
       setQuery('')
 
-      setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 80)
+      // Answers land at the top of the thread.
+      window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (err) {
+      if ((err as Error).name === 'AbortError') return
       setError(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
       setLoading(false)
     }
+  }, [exchanges, loading, userContext])
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    void runSearch(query)
   }
 
   function handleClarification(lastQuery: string, campus?: string, grade?: string) {
     const parts = [lastQuery]
     if (grade) parts.push(`for a ${grade} student`)
     if (campus) parts.push(`at ${campus}`)
-    handleSearch({ preventDefault: () => {} } as React.FormEvent, parts.join(' '))
-  }
-
-  function handleFollowUp(lastQuery: string, option: string) {
-    handleSearch({ preventDefault: () => {} } as React.FormEvent, `${lastQuery} at ${option}`)
-  }
-
-  function handleSuggestionClick(text: string) {
-    handleSearch({ preventDefault: () => {} } as React.FormEvent, text)
+    void runSearch(parts.join(' '))
   }
 
   function reset() {
+    abortRef.current?.abort()
     setExchanges([])
     setStreamingAnswer('')
     setStreamingSources([])
@@ -853,219 +890,157 @@ export default function Home() {
     inputRef.current?.focus()
   }
 
+  function savePreferences(ctx: TcaUserContext) {
+    saveContext(ctx)
+    setShowPreferences(false)
+  }
+
+  const personalized = Boolean(userContext && (userContext.campuses.length || userContext.grades.length))
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100svh' }}>
+    <div className="tca-page">
       <div className="tca-bg-glow" />
 
-      <main
-        style={{
-          position: 'relative',
-          zIndex: 1,
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: hasConversation ? 'flex-start' : 'center',
-          padding: hasConversation ? '60px 20px 60px' : `max(env(safe-area-inset-top, 0px), 0px) 20px 0`,
-          transition: 'justify-content 0.3s',
-        }}
-      >
-        {/* Hero */}
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '24px',
-            width: '100%',
-            maxWidth: '640px',
-            marginBottom: hasConversation ? '48px' : '0',
-          }}
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
-            <div style={{ textAlign: 'center' }}>
-              <h1 style={{ fontSize: 'clamp(28px, 7vw, 48px)', fontWeight: 300, letterSpacing: '-0.01em', color: 'var(--text-primary)', lineHeight: 1, marginBottom: hasConversation ? '0' : '6px' }}>
-                tca<span style={{ fontWeight: 600, color: 'var(--crimson)' }}>hub</span>
-              </h1>
-              {!hasConversation && (
-                <>
-                  <p style={{ fontSize: 'clamp(15px, 3.6vw, 22px)', fontWeight: 300, color: 'var(--text-dim)', whiteSpace: 'nowrap', overflow: 'hidden', maxWidth: '100%', paddingRight: '24px' }}>
-                    Ask about <CyclingText />
-                  </p>
-                  <p style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '8px', letterSpacing: '0.04em' }}>
-                    Built with love by{' '}
-                    <span
-                      style={{ position: 'relative', display: 'inline-block' }}
-                      onMouseEnter={e => {
-                        const tip = (e.currentTarget as HTMLElement).querySelector<HTMLElement>('.ai-tooltip')
-                        if (tip) tip.style.opacity = '1'
-                      }}
-                      onMouseLeave={e => {
-                        const tip = (e.currentTarget as HTMLElement).querySelector<HTMLElement>('.ai-tooltip')
-                        if (tip) tip.style.opacity = '0'
-                      }}
-                    >
-                      <span style={{ borderBottom: '1px dotted var(--text-dim)', cursor: 'default', paddingBottom: '1px' }}>a TCA family</span>
-                      <span
-                        className="ai-tooltip"
-                        style={{
-                          position: 'absolute', bottom: 'calc(100% + 8px)', left: '50%', transform: 'translateX(-50%)',
-                          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '10px',
-                          padding: '10px 14px', width: '200px', textAlign: 'center',
-                          opacity: 0, transition: 'opacity 0.15s', pointerEvents: 'none',
-                          boxShadow: '0 4px 16px rgba(0,0,0,0.08)', zIndex: 10,
-                        }}
-                      >
-                        <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-primary)', fontWeight: 500, marginBottom: '4px', letterSpacing: 0 }}>
-                          Designed with real family needs in mind.
-                        </span>
-                        <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-dim)', marginBottom: '8px', letterSpacing: 0 }}>
-                          Want something like this for your organization?
-                        </span>
-                        <a
-                          href="https://ai-delivered.com/local"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ display: 'inline-block', background: 'var(--crimson)', borderRadius: '20px', padding: '5px 12px', color: 'white', fontSize: '11px', textDecoration: 'none', fontWeight: 500, pointerEvents: 'auto' }}
-                        >
-                          ai-delivered →
-                        </a>
-                      </span>
-                    </span>
-                  </p>
-                </>
-              )}
-            </div>
+      <main className="tca-main" data-conversation={hasConversation}>
+        <div className="tca-hero tca-column">
+          <div>
+            <h1 className="tca-wordmark">tca<b>hub</b></h1>
+            {!hasConversation && (
+              <>
+                <p className="tca-tagline" style={{ marginTop: 6 }}>
+                  Ask about <CyclingText />
+                </p>
+                <p className="tca-byline" style={{ marginTop: 8 }}>
+                  Built with love by a TCA family ·{' '}
+                  <a
+                    href="https://ai-delivered.com/local"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: 'var(--crimson)', textDecoration: 'none' }}
+                  >
+                    ai-delivered
+                  </a>
+                </p>
+              </>
+            )}
           </div>
 
-          {/* Search */}
-          <form onSubmit={handleSearch} className="tca-search-wrap" style={{ marginTop: hasConversation ? '0' : '8px' }}>
+          <form onSubmit={handleSubmit} className="tca-search-wrap">
             <input
               ref={inputRef}
-              type="text"
+              type="search"
               value={query}
               onChange={e => setQuery(e.target.value)}
-              onFocus={() => setIsFocused(true)}
-              onBlur={() => setIsFocused(false)}
+              onFocus={() => void preloadSanitizer()}
               placeholder={hasConversation ? 'Ask a follow-up…' : 'Ask anything about TCA…'}
               className="tca-search-input"
               autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="sentences"
               spellCheck={false}
-              aria-label="Search TCA"
+              enterKeyHint="search"
+              maxLength={500}
+              aria-label="Ask a question about TCA"
             />
-            <button
-              type="submit"
-              disabled={loading || !query.trim()}
-              className="tca-search-btn"
-              aria-label="Search"
-            >
-              {loading && !streamingAnswer ? (
-                <div className="tca-dots"><span /><span /><span /></div>
-              ) : (
-                <SearchIcon />
-              )}
+            <button type="submit" disabled={loading || !query.trim()} className="tca-search-btn" aria-label="Search">
+              {loading && !streamingAnswer
+                ? <span className="tca-dots" aria-hidden="true"><span /><span /><span /></span>
+                : <SearchIcon />}
             </button>
           </form>
 
-          {/* Quick links + personalization — only on home screen */}
           {!hasConversation && (
             <>
-              <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap', marginTop: '4px' }}>
-                <button
-                  onClick={() => setShowCalendars(true)}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '20px', padding: '7px 14px', color: 'var(--text-dim)', fontSize: '13px', cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s' }}
-                >
-                  Calendars & Schedules
+              {/* These were computed and then never rendered — the trending
+                  request was made on every page load and the result thrown
+                  away. They are the fastest route to an answer on a phone. */}
+              <div className="tca-chip-row" aria-label="Suggested questions">
+                {chips.map(chip => (
+                  <button key={chip} className="tca-chip" onClick={() => void runSearch(chip)} disabled={loading}>
+                    {chip}
+                  </button>
+                ))}
+              </div>
+
+              <div className="tca-chip-row">
+                <button className="tca-chip" data-variant="quiet" onClick={() => setShowCalendars(true)}>
+                  Calendars &amp; Schedules
                 </button>
                 <a
+                  className="tca-chip"
+                  data-variant="quiet"
                   href="https://www.tcatitans.org/family/staff-directory"
                   target="_blank"
                   rel="noopener noreferrer"
-                  style={{ display: 'inline-flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '20px', padding: '7px 14px', color: 'var(--text-dim)', fontSize: '13px', textDecoration: 'none', transition: 'all 0.15s' }}
                 >
                   Staff Directory
                 </a>
+                <button className="tca-chip" data-variant="quiet" onClick={() => setShowPreferences(true)}>
+                  {personalized ? 'Edit my student' : 'Personalize'}
+                </button>
               </div>
+
+              <p className="tca-hint">
+                Press <kbd>/</kbd> to search
+              </p>
             </>
           )}
         </div>
 
-        {/* Error */}
         {error && (
-          <div style={{ maxWidth: '640px', width: '100%', padding: '14px 20px', background: 'rgba(185, 28, 58, 0.06)', border: '1px solid rgba(185, 28, 58, 0.2)', borderRadius: '14px', color: 'var(--crimson)', fontSize: '14px', marginBottom: '16px' }}>
-            {error}
+          <div className="tca-error tca-column" role="alert">
+            <span>{error}</span>
+            {lastQuery && (
+              <button className="tca-retry" onClick={() => void runSearch(lastQuery)}>
+                Try again
+              </button>
+            )}
           </div>
         )}
 
-        {/* Conversation thread */}
         {hasConversation && (
-          <div style={{ maxWidth: '640px', width: '100%', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <button
-              onClick={reset}
-              style={{ alignSelf: 'flex-start', background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: '13px', cursor: 'pointer', padding: '0', fontFamily: 'inherit', transition: 'color 0.15s' }}
-              onMouseEnter={e => { e.currentTarget.style.color = 'var(--navy)' }}
-              onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-dim)' }}
-            >
-              ← New search
-            </button>
+          <div className="tca-column" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            <button className="tca-link-btn" onClick={reset}>← New search</button>
 
-            {/* Active streaming exchange — always at top */}
             {(loading || streamingAnswer) && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {streamingStaffCards.length > 0 && <StaffCards cards={streamingStaffCards} />}
-                <AnswerCard
-                  answer={streamingAnswer}
-                  sources={streamingSources}
-                  isStreaming={true}
-                />
+                <AnswerCard answer={streamingAnswer} sources={streamingSources} isStreaming />
               </div>
             )}
 
-            {/* Prior exchanges — newest first */}
             {[...exchanges].reverse().map((ex, i) => {
               const isNewest = i === 0 && !loading && streamingAnswer === ''
               const showLabel = exchanges.length > 1 || loading || streamingAnswer !== ''
               return (
-                <div key={exchanges.length - 1 - i} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {showLabel && (
-                    <p style={{ fontSize: '12px', color: 'var(--text-dim)', fontStyle: 'italic', paddingLeft: '2px' }}>
-                      "{ex.query}"
-                    </p>
-                  )}
+                <div key={exchanges.length - 1 - i} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {showLabel && <p className="tca-quoted">&ldquo;{ex.query}&rdquo;</p>}
                   {ex.staffCards && <StaffCards cards={ex.staffCards} />}
                   <AnswerCard
                     answer={ex.answer}
                     sources={ex.sources}
                     onClarify={isNewest ? (campus, grade) => handleClarification(ex.query, campus, grade) : undefined}
-                    onFollowUp={isNewest ? (opt) => handleFollowUp(ex.query, opt) : undefined}
+                    onFollowUp={isNewest ? opt => void runSearch(`${ex.query} at ${opt}`) : undefined}
                   />
                 </div>
               )
             })}
-
-            <div ref={bottomRef} />
           </div>
         )}
       </main>
 
       {showCalendars && <CalendarPanel onClose={() => setShowCalendars(false)} />}
-      <PullToRefresh />
+      {showPreferences && (
+        <PreferencesPanel
+          initial={userContext}
+          onSave={savePreferences}
+          onClose={() => setShowPreferences(false)}
+        />
+      )}
       <AddToHomePrompt />
 
-      <footer
-        style={{
-          position: 'relative',
-          zIndex: 1,
-          textAlign: 'center',
-          padding: '16px 20px max(24px, env(safe-area-inset-bottom, 24px))',
-          borderTop: '1px solid var(--border)',
-          marginTop: '40px',
-          flexShrink: 0,
-        }}
-      >
-        <p style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '8px', opacity: 0.6 }}>
-          The Classical Academy · Colorado Springs, Colorado
-        </p>
+      <footer className="tca-footer">
+        <p>The Classical Academy · Colorado Springs, Colorado</p>
       </footer>
     </div>
   )

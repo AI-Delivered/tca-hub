@@ -2,8 +2,33 @@ import { NextRequest } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { getCache } from '@vercel/functions'
 import { queryKey } from '@/lib/query-key'
+import { rateLimit, tooManyRequests } from '@/lib/rate-limit'
+import { secretMatches } from '@/lib/auth'
 
 export const maxDuration = 60
+
+// Everything that reaches the model is bounded here. The body arrives from a
+// browser we don't control, and `history` is echoed straight into the Anthropic
+// call — unbounded, it is both a cost amplifier (one request carrying a megabyte
+// of "prior turns") and a way to put arbitrary text in front of the model.
+const MAX_QUERY_CHARS = 500
+const MAX_HISTORY_TURNS = 12
+const MAX_HISTORY_CHARS = 4_000
+
+interface Turn { role: 'user' | 'assistant'; content: string }
+
+function sanitizeHistory(input: unknown): Turn[] {
+  if (!Array.isArray(input)) return []
+  const turns: Turn[] = []
+  for (const item of input.slice(-MAX_HISTORY_TURNS)) {
+    if (!item || typeof item !== 'object') continue
+    const { role, content } = item as { role?: unknown; content?: unknown }
+    if (role !== 'user' && role !== 'assistant') continue
+    if (typeof content !== 'string' || !content.trim()) continue
+    turns.push({ role, content: content.slice(0, MAX_HISTORY_CHARS) })
+  }
+  return turns
+}
 
 // Answer cache. Parents ask the same handful of things — the dashboard's "top
 // repeated questions" is the whole business case — and every repeat was paying
@@ -173,14 +198,34 @@ const CALENDAR_CAMPUS_MAP: Record<string, string> = {
 
 export async function POST(req: NextRequest) {
   const requestStart = Date.now()
+
+  // 20 questions a minute is far past what a parent does and far below what a
+  // script does. The generous ceiling is deliberate: the identity is an IP, a
+  // whole school on one network shares it, and locking out a real family is a
+  // worse outcome than letting an abuser through a little longer.
+  const limit = await rateLimit(req, { name: 'search', limit: 20, windowMs: 60_000 })
+  if (!limit.ok) {
+    return tooManyRequests(limit, 'Too many questions in a row — give it a moment and try again.')
+  }
+
   const now = denverNow()
   const nowYear = now.getFullYear()
   const nowMonth = now.getMonth()
   const schoolYearLabel = `${schoolYearStart(now)}-${String(schoolYearStart(now) + 1).slice(2)}`
-  const { query, rawQuery, history = [], debug = false } = await req.json()
-  if (!query?.trim()) {
+
+  const body = await req.json().catch(() => null)
+  if (!body || typeof body !== 'object') {
+    return Response.json({ error: 'Invalid request' }, { status: 400 })
+  }
+  const rawQueryInput = (body as { rawQuery?: unknown }).rawQuery
+  const queryInput = (body as { query?: unknown }).query
+  if (typeof queryInput !== 'string' || !queryInput.trim()) {
     return Response.json({ error: 'Query required' }, { status: 400 })
   }
+  const query = queryInput.trim().slice(0, MAX_QUERY_CHARS)
+  const rawQuery = typeof rawQueryInput === 'string' ? rawQueryInput.trim().slice(0, MAX_QUERY_CHARS) : query
+  const history = sanitizeHistory((body as { history?: unknown }).history)
+  const debug = (body as { debug?: unknown }).debug === true
 
   const encoder = new TextEncoder()
   const send = (obj: unknown) => encoder.encode(JSON.stringify(obj) + '\n')
@@ -188,7 +233,7 @@ export async function POST(req: NextRequest) {
 
   // Follow-ups depend on what was said earlier, so only standalone questions are
   // cacheable. Debug runs bypass the cache so measurements reflect real retrieval.
-  const cacheable = !debug && (history as unknown[]).length === 0
+  const cacheable = !debug && history.length === 0
   const cacheKey = `answer:${CACHE_VERSION}:${BUILD_ID}:${now.toISOString().slice(0, 10)}:${queryKey(query)}`
   const cache = getCache()
 
@@ -235,7 +280,7 @@ export async function POST(req: NextRequest) {
   const supabase = getSupabaseAdmin()
 
   // Augment retrieval query with last user turn so follow-up questions inherit context
-  const lastUserMsg = (history as { role: string; content: string }[]).filter(m => m.role === 'user').slice(-1)[0]?.content ?? ''
+  const lastUserMsg = history.filter(m => m.role === 'user').slice(-1)[0]?.content ?? ''
   const baseQuery = lastUserMsg ? `${lastUserMsg} ${query}` : query
   const expansions = SYNONYM_EXPANSIONS.filter(([re]) => re.test(baseQuery)).map(([, term]) => term)
   const retrievalQuery = expansions.length ? `${baseQuery} ${expansions.join(' ')}` : baseQuery
@@ -248,7 +293,10 @@ export async function POST(req: NextRequest) {
   })
 
   if (error) {
-    return Response.json({ error: error.message }, { status: 500 })
+    // The database's own words ("relation … does not exist", column names, the
+    // failing filter) are a map of the schema. Keep them in the server log.
+    console.error('match_chunks failed:', error.message)
+    return Response.json({ error: 'Search is temporarily unavailable.' }, { status: 500 })
   }
 
   // Keyword fallback: name-based queries may not score high on vector search
@@ -351,26 +399,39 @@ export async function POST(req: NextRequest) {
       .filter(([m, y]) => y > nowYear || (y === nowYear && m >= nowMonth))
       .map(([m, y]) => `%${MONTH_NAMES[m]}-${y}`)
 
-    // Fetch all future months in parallel (one query per month-year slug, deduplicated by campus)
-    // Use High School as the canonical source for school-wide no-school days; add others for campus-specific events
-    const canonicalFilter = campusKey ? urlFilter : '%high-school-calendar%'
-    const canonicalRows = await Promise.all(
-      futureMonthSlugs.map(slug =>
-        supabase.from('page_chunks').select('url, title, content').ilike('url', canonicalFilter).ilike('url', slug).limit(1)
-      )
-    )
-    // If no campus specified, also pull elementary + JH chunks for campus-specific events
-    const extraRows = campusKey ? [] : await Promise.all(
-      futureMonthSlugs.flatMap(slug => [
-        supabase.from('page_chunks').select('url, title, content').ilike('url', '%east-elementary-calendar%').ilike('url', slug).limit(1),
-        supabase.from('page_chunks').select('url, title, content').ilike('url', '%junior-high-calendar%').ilike('url', slug).limit(1),
-      ])
-    )
-    const allDaysOffRows = [
-      ...canonicalRows.flatMap(r => r.data ?? []),
-      ...extraRows.flatMap(r => r.data ?? []),
-    ]
-    const daysOffChunks = allDaysOffRows.map(c => ({ ...c, similarity: 0.72 }))
+    // One query for every campus × every remaining month of the school year.
+    //
+    // This used to be a query per month per campus — up to 33 separate round
+    // trips to Supabase before the model saw a single word, all of them on the
+    // critical path of "when is the next day off". They're now a single
+    // statement: the months become one OR group, the campuses another, and
+    // Postgres does the intersecting.
+    //
+    // High School is the canonical source for school-wide no-school days;
+    // East and Junior High are added for campus-specific events when the parent
+    // didn't name a campus.
+    const campusFilters = campusKey
+      ? [urlFilter]
+      : ['%high-school-calendar%', '%east-elementary-calendar%', '%junior-high-calendar%']
+
+    const { data: daysOffRows } = await supabase
+      .from('page_chunks')
+      .select('url, title, content')
+      .or(campusFilters.map(f => `url.ilike.${f}`).join(','))
+      .or(futureMonthSlugs.map(s => `url.ilike.${s}`).join(','))
+      .order('url', { ascending: true })
+      .limit(120)
+
+    // The per-month `.limit(1)` the fan-out used to give is reproduced here:
+    // one chunk per calendar page, so a long month can't crowd out the rest.
+    const seenCalendarUrls = new Set<string>()
+    const daysOffChunks = (daysOffRows ?? [])
+      .filter(c => {
+        if (seenCalendarUrls.has(c.url)) return false
+        seenCalendarUrls.add(c.url)
+        return true
+      })
+      .map(c => ({ ...c, similarity: 0.72 }))
     keywordChunks = [...keywordChunks, ...daysOffChunks]
   }
 
@@ -653,7 +714,7 @@ export async function POST(req: NextRequest) {
   // Inspect what a question would cost and what it would be answered from,
   // without spending a single answer token. Secret-gated; used by
   // scripts/measure-context.mjs to prove a context trim didn't drop the facts.
-  if (debug && req.headers.get('x-crawl-secret') === process.env.CRAWL_SECRET) {
+  if (debug && secretMatches(req.headers.get('x-crawl-secret'), process.env.CRAWL_SECRET)) {
     const chars = context.length
     return Response.json({
       query,
@@ -674,7 +735,7 @@ export async function POST(req: NextRequest) {
   // Prior turns: clean query + answer text (no context injection)
   // Current turn: query + fresh context
   const anthropicMessages: { role: 'user' | 'assistant'; content: string }[] = [
-    ...(history as { role: 'user' | 'assistant'; content: string }[]),
+    ...history,
     {
       role: 'user',
       content: `Context from TCA website:\n\n${context}\n\nQuestion: ${query}`,
@@ -722,7 +783,7 @@ Answer style:
   // Escalate to Sonnet only on the harder cases — weak retrieval match (model has to
   // synthesize/hedge across thin or conflicting sources) or a long multi-turn thread
   // (more context to track correctly). Everything else stays on Haiku.
-  const isHardCase = topSimilarity < 0.55 || (history as unknown[]).length >= 6
+  const isHardCase = topSimilarity < 0.55 || history.length >= 6
   const MODEL = isHardCase ? 'claude-sonnet-5' : 'claude-haiku-4-5-20251001'
 
   // Stream the response

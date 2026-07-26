@@ -179,6 +179,7 @@ function PasswordGate({ onUnlock }: { onUnlock: (key: string) => void }) {
   const [value, setValue] = useState('')
   const [showHint, setShowHint] = useState(false)
   const [rejected, setRejected] = useState(false)
+  const [unavailable, setUnavailable] = useState('')
   const [checking, setChecking] = useState(false)
 
   async function submit(e: React.FormEvent) {
@@ -191,6 +192,9 @@ function PasswordGate({ onUnlock }: { onUnlock: (key: string) => void }) {
     if (res.ok) {
       localStorage.setItem(KEY_STORAGE, value)
       onUnlock(value)
+    } else if (res.status === 503) {
+      const body = await res.json().catch(() => null)
+      setUnavailable(body?.error ?? 'The dashboard is not configured.')
     } else {
       setRejected(true)
     }
@@ -225,6 +229,11 @@ function PasswordGate({ onUnlock }: { onUnlock: (key: string) => void }) {
           {checking ? 'Checking…' : 'Enter'}
         </button>
         {rejected && <p style={{ color: '#ff6b6b', fontSize: 12, marginTop: 10 }}>Not it.</p>}
+        {unavailable && (
+          <p style={{ color: '#ffb454', fontSize: 12, marginTop: 10, lineHeight: 1.5 }}>
+            {unavailable}
+          </p>
+        )}
         <button
           type="button"
           onClick={() => setShowHint(true)}
@@ -265,7 +274,12 @@ export default function AdminDashboard() {
         setAdminKey(null)
         return
       }
-      if (!res.ok) throw new Error(`Request failed (${res.status})`)
+      if (!res.ok) {
+        // The API says why — 'set ADMIN_PASSWORD' is a five-second fix, and a
+        // bare 'Request failed (503)' sends you reading server logs instead.
+        const body = await res.json().catch(() => null)
+        throw new Error(body?.error ?? `Request failed (${res.status})`)
+      }
       setStats(await res.json())
     } catch (e) {
       setError(String(e))

@@ -1,36 +1,82 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TCA Hub
 
-## Getting Started
+Ask a question about The Classical Academy in Colorado Springs — bell schedules,
+staff, athletics, calendars, dress code, supply lists — and get a straight answer
+with the pages it came from.
 
-First, run the development server:
+Next.js App Router on Vercel. Content is scraped from tcatitans.org and a handful
+of calendar feeds into Supabase, retrieved with Voyage embeddings, and answered
+by Claude.
+
+## Running it
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Copy `.env.example` to `.env.local` and fill it in. `ADMIN_PASSWORD` is required
+for the `/nerds` dashboard — unset, the analytics API returns 503 rather than
+falling back to a default password.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run build     # production build
+npm run lint      # eslint
+npm test          # markdown sanitizer cases (scripts/test-markdown.mjs)
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## How a question is answered
 
-## Learn More
+`src/app/api/search/route.ts` is the whole path:
 
-To learn more about Next.js, take a look at the following resources:
+1. **Cache.** Standalone questions are keyed on their canonical form
+   (`src/lib/query-key.ts`) plus today's date and the deployment id. A hit skips
+   the embedding, the retrieval and the generation.
+2. **Retrieval.** The question is embedded with `voyage-3-lite` and matched
+   against `page_chunks` via the `match_chunks` RPC, then supplemented with
+   keyword anchors — staff by name and by role, calendar months, per-sport
+   schedules — because near-identical chunks compete for the top-16 slots.
+3. **Trimming.** Chunks are cut down to the part that can answer the question
+   before they reach the model. `scripts/measure-context.mjs` asserts the
+   answer-bearing facts survive each trim.
+4. **Generation.** Haiku by default; Sonnet when retrieval scored poorly or the
+   thread is long. Streamed to the browser as NDJSON, with staff photo cards
+   pushed as soon as the answer names somebody.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+If the model can't be reached, staff questions are still answered directly from
+the retrieved rows rather than apologising.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Security
 
-## Deploy on Vercel
+- **Model output is never trusted HTML.** `src/lib/markdown.ts` configures
+  marked so it cannot emit raw HTML, validates every link protocol, and escapes
+  every attribute; DOMPurify runs over the result as a second, lazily-loaded
+  pass. `npm test` proves the cases.
+- **The public endpoints are rate limited** (`src/lib/rate-limit.ts`) —
+  `/api/search` spends money per call, `/api/track-visit` writes a row per call.
+- **Request bodies are bounded.** Question length, conversation length and each
+  turn's size are all capped before anything reaches the model.
+- **Secrets are compared in constant time** and a missing secret authorizes
+  nobody (`src/lib/auth.ts`).
+- **Security headers, including a CSP**, are set in `next.config.ts`.
+- **Row level security** is enabled on every table by
+  `supabase/migrations/006_enable_rls.sql`. The app uses the service role, which
+  bypasses RLS; anything reading from the browser needs its own explicit policy.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Scheduled ingestion
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`vercel.json` runs the crawl and ingest routes on a schedule. Set `CRON_SECRET`
+in Vercel and the scheduler sends it as a bearer token, which is what the routes
+verify; without it they fall back to trusting the `x-vercel-cron` header.
+
+To run one by hand:
+
+```bash
+curl -H "Authorization: Bearer $CRAWL_SECRET" https://tca-hub.vercel.app/api/crawl/ingest-staff
+```
+
+## Dashboard
+
+`/nerds` — query volume, questions that came back empty or thin, cost per model,
+site visits, and a copyable prompt per failing question. Gated by
+`ADMIN_PASSWORD`, sent as an `x-admin-key` header.

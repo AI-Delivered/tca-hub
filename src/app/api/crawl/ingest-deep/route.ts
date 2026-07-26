@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { isCrawlAuthorized } from '@/lib/auth'
 
 export const maxDuration = 300
 
@@ -21,13 +22,6 @@ const SEED_PAGES = [
   { url: 'https://www.tcatitans.org/family/attendance-absences', title: 'TCA Attendance & Absences' },
   { url: 'https://www.tcatitans.org/family/lunch-information', title: 'TCA Lunch Information' },
 ]
-
-function isAuthorized(req: NextRequest): boolean {
-  if (req.headers.get('x-vercel-cron') === '1') return true
-  const secret = req.nextUrl.searchParams.get('secret')
-  if (secret === process.env.CRAWL_SECRET) return true
-  return req.headers.get('authorization') === `Bearer ${process.env.CRAWL_SECRET}`
-}
 
 function htmlToText(html: string): string {
   return html
@@ -58,7 +52,7 @@ function chunkText(text: string, size = 1800, overlap = 200): string[] {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { VoyageAIClient } = await import('voyageai')
   const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })
