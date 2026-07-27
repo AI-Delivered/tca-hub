@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
+import { sanitizeForPostgres } from '@/lib/ingest-chunks'
 
 export const maxDuration = 300
 
@@ -141,7 +142,14 @@ const BATCH_PAUSE_MS = 200
 // meant a 150-document backlog would take two months to clear; this works until
 // the clock runs out and the next run picks up where it left off, because
 // already-indexed URLs are skipped.
-const RUN_BUDGET_MS = 240_000
+//
+// 200s, not 240s, and the gap is deliberate. The budget is checked *before*
+// each document, so a document that starts just under the line still runs to
+// completion — a fetch (up to 20s), a Claude extraction, an embed call and its
+// inserts, comfortably 60s more. At 240s that lands right on maxDuration = 300
+// and Vercel kills the function mid-write; a local run overshot 300s and
+// tripped the client's own header timeout, which is what surfaced this.
+const RUN_BUDGET_MS = 200_000
 
 interface Discovered {
   url: string
@@ -326,6 +334,13 @@ export async function POST(req: NextRequest) {
           .trim()
       }
 
+      // Claude's extraction of a scanned or oddly-encoded PDF can carry NUL
+      // bytes and unpaired surrogates, neither of which Postgres will store.
+      // Unsanitised, every chunk of such a document failed to insert, the
+      // document never got marked indexed, and the next run picked it up and
+      // paid to extract it again — forever.
+      content = sanitizeForPostgres(content)
+
       if (!content || content.length < 100) { skipped++; continue }
 
       // The link's anchor text, so retrieval and the sources list under an
@@ -347,7 +362,12 @@ export async function POST(req: NextRequest) {
         const { error } = await supabase
           .from('page_chunks')
           .insert({ url: doc.url, title, content: chunks[i], embedding })
-        if (error) errors++; else indexedCount++
+        if (error) {
+          errors++
+          if (errors <= 3) console.error(`page_chunks insert failed for ${doc.url}: ${error.message}`)
+        } else {
+          indexedCount++
+        }
       }
     } catch {
       errors++

@@ -31,6 +31,30 @@ const EMBED_BATCH = 96
 // text still can't produce a rejected request.
 const EMBED_INPUT_CHARS = 16_000
 
+/**
+ * Strips the two character classes Postgres refuses to store in a text column.
+ *
+ * Found the hard way: a PDF ingest run logged 147 failed inserts, and the count
+ * was *identical* on eight consecutive rounds. Identical is the tell — the same
+ * documents were failing the same way every time, never getting indexed, and so
+ * never leaving the queue. Each round re-fetched them, re-paid Claude to extract
+ * them, and re-failed, which is also why the backlog never converged.
+ *
+ *   U+0000            → "unsupported Unicode escape sequence"
+ *   lone surrogate    → "Empty or invalid json"
+ *
+ * Both come out of PDF text extraction routinely. Replaced with a space rather
+ * than removed so word boundaries survive.
+ */
+export function sanitizeForPostgres(text: string): string {
+  return text
+    .replace(/\u0000/g, ' ')
+    // Unpaired halves of a surrogate pair — a paired one is a valid character
+    // and is left alone by these two patterns.
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, ' ')
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, ' ')
+}
+
 export function chunkText(text: string, chunkSize = CHUNK_SIZE, overlap = CHUNK_OVERLAP): string[] {
   const chunks: string[] = []
   let start = 0
@@ -71,7 +95,7 @@ export async function storeChunks(
   record: ChunkRecord,
   crawledAt: string
 ): Promise<StoreResult> {
-  const pieces = chunkText(record.content)
+  const pieces = chunkText(sanitizeForPostgres(record.content))
   let inserted = 0
   let errors = 0
 
@@ -102,7 +126,14 @@ export async function storeChunks(
         crawled_at: crawledAt,
         ...record.extra,
       })
-      if (error) errors++; else inserted++
+      // Logged, not just counted. A bare counter is what let 147 identical
+      // failures repeat for eight rounds without anyone knowing what they were.
+      if (error) {
+        errors++
+        if (errors <= 3) console.error(`page_chunks insert failed for ${record.url}: ${error.message}`)
+      } else {
+        inserted++
+      }
     }
   }
 
