@@ -10,10 +10,18 @@ const PRICING = {
   sonnet: { input: 3.0, output: 15.0 },
 }
 
+// Cache tokens are billed at a multiple of the input rate: writing an entry
+// costs 1.25x, reading one costs 0.1x. Counting them as free (or not at all)
+// understates spend on every cached request.
+const CACHE_WRITE_MULTIPLIER = 1.25
+const CACHE_READ_MULTIPLIER = 0.1
+
 interface PricedRow {
   model?: string | null
   input_tokens?: number | null
   output_tokens?: number | null
+  cache_creation_input_tokens?: number | null
+  cache_read_input_tokens?: number | null
 }
 
 /** Prices a set of logged queries. Rows predating token logging are skipped
@@ -29,7 +37,11 @@ function priceRows(rows: PricedRow[]) {
     const isSonnet = Boolean(r.model?.includes('sonnet'))
     if (isSonnet) sonnetQueries++
     const pricing = isSonnet ? PRICING.sonnet : PRICING.haiku
+    // input_tokens is only the uncached remainder once prompt caching is on —
+    // the cached portions are billed separately, not for free.
     cost += ((r.input_tokens ?? 0) / 1_000_000) * pricing.input
+    cost += ((r.cache_creation_input_tokens ?? 0) / 1_000_000) * pricing.input * CACHE_WRITE_MULTIPLIER
+    cost += ((r.cache_read_input_tokens ?? 0) / 1_000_000) * pricing.input * CACHE_READ_MULTIPLIER
     cost += ((r.output_tokens ?? 0) / 1_000_000) * pricing.output
   }
   return { cost, sonnetQueries, pricedQueries }
@@ -134,6 +146,15 @@ function isAuthorized(req: Request): boolean {
   return secretMatches(req.headers.get('x-admin-key'), process.env.ADMIN_PASSWORD)
 }
 
+// null = not yet known; set false on the first select that reports them missing.
+let cacheColumnsExist: boolean | null = null
+
+function isMissingColumn(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false
+  if (error.code === '42703' || error.code === 'PGRST204') return true
+  return /column .* does not exist|could not find the .* column/i.test(error.message ?? '')
+}
+
 export async function GET(req: Request) {
   if (!process.env.ADMIN_PASSWORD) {
     // Said out loud rather than as a bare 401, because the difference between
@@ -149,6 +170,13 @@ export async function GET(req: Request) {
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
 
   const supabase = getSupabaseAdmin()
+
+  // The cache-token columns arrive with migration 008. Postgres rejects a select
+  // naming a column it doesn't have, so both queries below drop them until the
+  // migration lands — the dashboard keeps working, just without cache pricing.
+  const CACHE_COLS = ', cache_creation_input_tokens, cache_read_input_tokens'
+  const cacheCols = cacheColumnsExist === false ? '' : CACHE_COLS
+
   // Spend against the budget is deliberately NOT scoped to the selected range —
   // credit is consumed once, so a burn-down that shrank when you clicked "7d"
   // would be nonsense. This reads from the top-up baseline forward regardless
@@ -156,7 +184,7 @@ export async function GET(req: Request) {
   const budgetQuery = CREDIT_BUDGET
     ? supabase
         .from('query_log')
-        .select('model, input_tokens, output_tokens, created_at')
+        .select(`model, input_tokens, output_tokens, created_at${cacheCols}`)
         .gte('created_at', CREDIT_SINCE ?? '1970-01-01')
         .order('created_at', { ascending: false })
         .limit(BUDGET_ROW_LIMIT)
@@ -165,7 +193,7 @@ export async function GET(req: Request) {
   const [{ data, error }, { data: visitData, error: visitError }, budgetRes] = await Promise.all([
     supabase
       .from('query_log')
-      .select('id, query, created_at, had_results, source_count, top_similarity, model, latency_ms, answer_preview, input_tokens, output_tokens')
+      .select(`id, query, created_at, had_results, source_count, top_similarity, model, latency_ms, answer_preview, input_tokens, output_tokens${cacheCols}`)
       .gte('created_at', since)
       .order('created_at', { ascending: false })
       .limit(5000),
@@ -178,12 +206,26 @@ export async function GET(req: Request) {
     budgetQuery,
   ])
 
+  if (error && cacheCols && isMissingColumn(error)) {
+    // Migration 008 hasn't been applied — remember, and let the next request
+    // build its selects without the cache columns.
+    console.warn(
+      'query_log is missing the cache-token columns — apply supabase/migrations/008_cache_tokens.sql. ' +
+        'Cost figures exclude prompt-cache tokens until then.'
+    )
+    cacheColumnsExist = false
+    return Response.json({ error: 'Reloading — apply migration 008 and refresh.' }, { status: 503 })
+  }
+  if (!error && cacheCols) cacheColumnsExist = true
+
   if (error || visitError) {
     console.error('admin stats query failed:', error?.message ?? visitError?.message)
     return Response.json({ error: 'Could not load analytics.' }, { status: 500 })
   }
 
-  const rows = (data ?? []) as LogRow[]
+  // `as unknown as` because supabase-js parses the select string at the type
+  // level, and the column list is now a template literal it can't resolve.
+  const rows = (data ?? []) as unknown as LogRow[]
   const visits = (visitData ?? []) as { created_at: string; visitor_id: string | null }[]
 
   const total = rows.length
@@ -329,7 +371,7 @@ export async function GET(req: Request) {
   // which is the question a balance is usually a proxy for anyway.
   let budget = null
   if (CREDIT_BUDGET) {
-    const budgetRows = (budgetRes?.data ?? []) as (PricedRow & { created_at: string })[]
+    const budgetRows = (budgetRes?.data ?? []) as unknown as (PricedRow & { created_at: string })[]
     const spent = priceRows(budgetRows).cost
 
     // Rate comes from the trailing 7 days, not from the whole baseline period —

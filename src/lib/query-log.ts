@@ -28,10 +28,18 @@ export interface QueryLogRow {
   cache_hit: boolean
   input_tokens?: number | null
   output_tokens?: number | null
+  cache_creation_input_tokens?: number | null
+  cache_read_input_tokens?: number | null
 }
 
-/** Columns that only exist once 007_query_detail.sql has been applied. */
-const DETAIL_COLUMNS = ['answer', 'sources', 'cache_hit'] as const
+/** Columns that only exist once 007 and 008 have been applied. */
+const DETAIL_COLUMNS = [
+  'answer',
+  'sources',
+  'cache_hit',
+  'cache_creation_input_tokens',
+  'cache_read_input_tokens',
+] as const
 
 // null = not yet known. Set on the first insert of the process.
 let detailColumnsExist: boolean | null = null

@@ -738,13 +738,39 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  // Build conversation messages for Anthropic
-  // Prior turns: clean query + answer text (no context injection)
-  // Current turn: query + fresh context
-  const anthropicMessages: { role: 'user' | 'assistant'; content: string }[] = [
-    ...history,
+  /* Build conversation messages for Anthropic.
+   *   Prior turns: clean query + answer text (no context injection)
+   *   Current turn: query + fresh context
+   *
+   * The last prior turn carries a cache breakpoint. Prior turns are identical
+   * on every request of a conversation — the retrieved context is only ever
+   * attached to the *current* turn — so `system + history` is a stable prefix
+   * that grows by one turn each time, and each turn reads what the previous
+   * one wrote. Follow-ups arrive seconds apart, well inside the 5-minute TTL.
+   *
+   * This is the breakpoint that matters on the Haiku path: the system prompt
+   * alone (1,534 tokens) is under Haiku's 4,096-token floor, but system plus a
+   * few turns of history clears it. Multi-turn threads were also the expensive
+   * ones — the worst logged query was a five-turn conversation re-sending its
+   * whole history at 126,750 input tokens. */
+  const anthropicMessages: {
+    role: 'user' | 'assistant'
+    content: string | { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }[]
+  }[] = [
+    ...history.map((turn, i) =>
+      i === history.length - 1
+        ? {
+            role: turn.role,
+            content: [
+              { type: 'text' as const, text: turn.content, cache_control: { type: 'ephemeral' as const } },
+            ],
+          }
+        : turn
+    ),
     {
-      role: 'user',
+      role: 'user' as const,
+      // Deliberately NOT cached: the context is freshly retrieved per question,
+      // so a breakpoint here would write an entry no later request could read.
       content: `Context from TCA website:\n\n${context}\n\nQuestion: ${query}`,
     },
   ]
@@ -761,7 +787,7 @@ High school grade levels: 9th = Freshman, 10th = Sophomore, 11th = Junior, 12th 
 
 Be smart about context: sports (football, basketball, soccer, wrestling, cheer, etc.), athletics schedules, and team-specific questions only apply to Junior High and High School — never mention elementary in those answers unless the parent specifically brings it up. Literacy testing (DIBELS, reading assessments, oral reading fluency, etc.) only applies to elementary campuses (Central, East, North) — never reference it for Junior High or High School. If the parent has a 5th grader and asks about football, answer for JH/HS and don't add a note about the elementary student.
 
-Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current time is approximately ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })} Mountain Time. Current school year is ${schoolYearLabel}. A date is "past" only if it is before TODAY's date — today's events are current and valid to cite regardless of month. Never dismiss July or August events as "summer break" — TCA runs athletics, camps, and activities year-round including summer. If you only have a past date for a recurring annual event, say "Last year it was [date] — the ${schoolYearLabel} date hasn't been posted yet." Never call a future date "already passed."
+Current school year is ${schoolYearLabel}. A date is "past" only if it is before TODAY's date — today's events are current and valid to cite regardless of month. Never dismiss July or August events as "summer break" — TCA runs athletics, camps, and activities year-round including summer. If you only have a past date for a recurring annual event, say "Last year it was [date] — the ${schoolYearLabel} date hasn't been posted yet." Never call a future date "already passed."
 
 Calendar data is authoritative: if the calendar context includes a month's events and a specific date in that month is NOT listed as a closure, no-school day, or break, then school IS in session on that date. You do not need to say "I'm not sure" — if you have the month's data and the date isn't listed as a closure, confidently say school is in session. Only express uncertainty if you don't have that month's calendar data at all.
 
@@ -785,11 +811,41 @@ Answer style:
 - For lists (spelling words, supply lists, etc.): reproduce them completely, don't summarize.
 - You're in a conversation — use prior context naturally. **Conversation context beats profile**: if the prior turn mentioned a specific campus or school, assume that campus for follow-up questions without clarifying.`
 
+  /* The system prompt, split so the stable part can be cached.
+   *
+   * Prompt caching is a prefix match: the cache key is the exact bytes up to
+   * the breakpoint, and anything that changes invalidates everything after it.
+   * The clock below used to sit in the middle of this prompt —
+   * "Current time is approximately 3:47 PM" — which rewrote the prefix every
+   * minute. Marking that prompt as cacheable would have bought a 1.25x write
+   * on nearly every request and almost never a read.
+   *
+   * So the volatile line moves to its own block after the breakpoint. Blocks
+   * render in order, so everything before `cache_control` is the cached
+   * prefix and the date/time rides behind it, uncached and free to change.
+   *
+   * `schoolYearLabel` stays inside the cached block deliberately: it changes
+   * once a year, and a yearly invalidation is not worth a second block. */
+  const systemBlocks = [
+    { type: 'text' as const, text: systemPrompt, cache_control: { type: 'ephemeral' as const } },
+    {
+      type: 'text' as const,
+      text: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current time is approximately ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })} Mountain Time.`,
+    },
+  ]
+
   const topSimilarity = merged.reduce((max: number, c: Chunk) => Math.max(max, c.similarity), 0)
 
   // Escalate to Sonnet only on the harder cases — weak retrieval match (model has to
   // synthesize/hedge across thin or conflicting sources) or a long multi-turn thread
   // (more context to track correctly). Everything else stays on Haiku.
+  //
+  // Worth knowing for caching: the minimum cacheable prefix is model-specific —
+  // 1,024 tokens on Sonnet 5, but 4,096 on Haiku 4.5. This system prompt measures
+  // 1,534 tokens, so it caches on the Sonnet path and is silently too short to
+  // cache on the Haiku one (no error — just no cache entry). The breakpoint on
+  // the last history turn below is what earns a hit on Haiku, once a conversation
+  // has grown past that floor.
   const isHardCase = topSimilarity < 0.55 || history.length >= 6
   const MODEL = isHardCase ? 'claude-sonnet-5' : 'claude-haiku-4-5-20251001'
 
@@ -811,12 +867,17 @@ Answer style:
 
       let answerText = ''
       let failure = ''
-      let usage: { input_tokens?: number; output_tokens?: number } = {}
+      let usage: {
+        input_tokens?: number
+        output_tokens?: number
+        cache_creation_input_tokens?: number
+        cache_read_input_tokens?: number
+      } = {}
       try {
         const stream = anthropic.messages.stream({
           model: MODEL,
           max_tokens: 1024,
-          system: systemPrompt,
+          system: systemBlocks,
           messages: anthropicMessages,
         })
 
@@ -834,7 +895,15 @@ Answer style:
             usage = { ...usage, output_tokens: event.usage.output_tokens }
           }
           if (event.type === 'message_start') {
-            usage = { ...usage, input_tokens: event.message.usage.input_tokens }
+            // All three, not just input_tokens: with caching on, input_tokens is
+            // the *uncached remainder*. Total prompt size is the sum, and the
+            // cached portions are still billed — 1.25x to write, 0.1x to read.
+            usage = {
+              ...usage,
+              input_tokens: event.message.usage.input_tokens,
+              cache_creation_input_tokens: event.message.usage.cache_creation_input_tokens ?? 0,
+              cache_read_input_tokens: event.message.usage.cache_read_input_tokens ?? 0,
+            }
           }
         }
       } catch (e) {
@@ -888,6 +957,8 @@ Answer style:
         cache_hit: false,
         input_tokens: usage?.input_tokens ?? null,
         output_tokens: usage?.output_tokens ?? null,
+        cache_creation_input_tokens: usage?.cache_creation_input_tokens ?? null,
+        cache_read_input_tokens: usage?.cache_read_input_tokens ?? null,
       })
 
       controller.enqueue(send({ type: 'done' }))
