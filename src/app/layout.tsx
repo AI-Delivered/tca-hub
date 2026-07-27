@@ -16,9 +16,22 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://tca-hub.vercel.app
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  viewportFit: "cover",
+  // Deliberately NOT "cover". Under cover, iOS runs the page behind its toolbar
+  // and paints a scrim there for legibility — and that scrim's top edge is a
+  // hard line across the page, which nothing in CSS can reach. Without cover the
+  // content stops above the bar instead, and the bar carries themeColor below:
+  // the same value as --bg, which the glow already fades to at the edges, so the
+  // two meet in one colour and there is no edge to see. The cost is that the
+  // background no longer runs under the notch — a seam is worse than not having
+  // the bleed.
+  viewportFit: "auto",
   // Matches the page background in each theme, so the iOS status bar and the
   // Android chrome don't sit in a different colour to the app.
+  //
+  // The raw tokens, deliberately. .tca-bg-glow now fades out across the safe
+  // areas, so the page's top and bottom edges are flat --bg — and a bar painted
+  // in anything else would be the mismatch rather than the cure. These two
+  // values and that mask have to agree; changing one means changing the other.
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#f7f8fc" },
     { media: "(prefers-color-scheme: dark)", color: "#0a0e1a" },

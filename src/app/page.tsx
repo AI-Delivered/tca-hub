@@ -167,6 +167,17 @@ function SearchIcon() {
   )
 }
 
+/** The arrow a completion is accepted with on touch — the same one a keyboard
+ *  user presses Tab for. */
+function AcceptIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3 8H12.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M9 4.5L12.5 8L9 11.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 /** Escape closes, focus moves in and comes back, and the rest of the page is
  *  hidden from assistive technology while the dialog is open. */
 function useDialog(onClose: () => void) {
@@ -656,7 +667,10 @@ export default function Home() {
 
   const acceptCompletion = useCallback(() => {
     if (!completion) return
-    setQuery(q => q + completion)
+    // Appending is guarded rather than unconditional: two accept paths can fire
+    // for one gesture on some engines, and `completion` is captured per render,
+    // so an unguarded append would land twice before the state settled.
+    setQuery(q => (q.endsWith(completion) ? q : q + completion))
     inputRef.current?.focus()
   }, [completion])
 
@@ -734,16 +748,34 @@ export default function Home() {
           </div>
 
           <form onSubmit={handleSubmit} className="tca-search-wrap">
-            {/* The completion sits in a layer underneath the input, which is
-                transparent. The typed half is rendered invisibly so the grey
-                half starts at exactly the right x — no measuring, no drift as
-                the font loads. Tapping the grey text accepts it, which is the
-                only way to accept one on a phone. */}
+            {/* The completion sits in a transparent layer above the input. The
+                typed half is rendered invisibly so the grey half starts at
+                exactly the right x — no measuring, no drift as the font loads.
+                The layer ignores pointer events except for the button covering
+                the grey text, which is the only way to accept a completion on a
+                phone — there is no Tab key on a soft keyboard. It is hidden from
+                assistive tech (the whole layer is) and kept out of the tab order,
+                which is both what aria-hidden requires of a focusable child and
+                right on its own: Tab here means accept, not move on. */}
             <div className="tca-ghost" aria-hidden="true">
               <span className="tca-ghost-typed">{query}</span>
               {completion && (
-                <span className="tca-ghost-completion" onClick={acceptCompletion}>
+                <span className="tca-ghost-completion">
                   {completion}
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    className="tca-ghost-accept"
+                    /* pointerdown, not click. A tap on iOS produces click only
+                       at the end of a synthesized mouse sequence that WebKit
+                       will withhold under conditions this layer meets — and
+                       suppressing that sequence to stop it stealing focus is
+                       itself one of them. pointerdown is the gesture itself: it
+                       fires for touch, pen and mouse alike, before any of that,
+                       and preventing its default is what keeps focus and the
+                       soft keyboard on the input. */
+                    onPointerDown={e => { e.preventDefault(); acceptCompletion() }}
+                  />
                   <span className="tca-ghost-key">tab</span>
                 </span>
               )}
@@ -766,6 +798,33 @@ export default function Home() {
               aria-label="Ask a question about TCA"
               aria-autocomplete="inline"
             />
+            {/* Touch gets the suggestion as a row beneath the box instead of as
+                grey text inside it. Inline completion needs the typed text AND
+                the completion to fit on one line, and on a phone they do not: the
+                input scrolls to follow the caret, the layer underneath cannot
+                follow it, and the completion ends up outside the clip. A row has
+                the full width to itself, shows the whole question rather than the
+                first two thirds of it, and is a target you can actually hit.
+                Absolutely positioned so its arrival does not push the page
+                around. */}
+            {completion && (
+              <button
+                type="button"
+                className="tca-suggest-row"
+                /* click, not pointerdown. Accepting on pointerdown unmounts this
+                   row while the finger is still down, so the rest of the tap —
+                   which the browser delivers to whatever is at those coordinates
+                   when it ends — landed on the chip underneath. Waiting for the
+                   click keeps the whole gesture on the row, and the row is gone
+                   only once nothing more is coming. Unlike the grey-text overlay
+                   this is a real button with real content, which iOS dispatches
+                   click on without any of that element's caveats. */
+                onClick={acceptCompletion}
+              >
+                <span className="tca-suggest-row-text">{query + completion}</span>
+                <AcceptIcon />
+              </button>
+            )}
             <button type="submit" disabled={loading || !query.trim()} className="tca-search-btn" aria-label="Search">
               {loading && !streamingAnswer
                 ? <span className="tca-dots" aria-hidden="true"><span /><span /><span /></span>
@@ -774,7 +833,10 @@ export default function Home() {
             {/* Announced rather than shown, since the grey text is invisible to
                 a screen reader sitting on the input. */}
             <span className="tca-sr-only" aria-live="polite">
-              {completion ? `Suggestion: ${query}${completion}. Press Tab to accept.` : ''}
+              {/* No mention of Tab: on the device this is most likely to be
+                  read aloud on there isn't one, and the suggestion is a labelled
+                  button of its own there. */}
+              {completion ? `Suggestion: ${query}${completion}.` : ''}
             </span>
           </form>
 

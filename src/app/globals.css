@@ -13,14 +13,18 @@
 
   /* Brand.
 
-     Two tokens, because one colour cannot do both jobs. --crimson is the fill:
-     it sits behind white text on buttons, so it has to stay dark. --crimson-text
-     is crimson used AS text against --bg, so it has to stay light enough to read.
-     On the light theme they are the same value; on dark they cannot be. */
+     Three tokens, because one colour cannot do three jobs. --crimson is the
+     fill: it sits behind white text on buttons, so it has to stay dark.
+     --crimson-text is crimson used AS small text against --bg, so it has to stay
+     light enough to clear 4.5:1. --crimson-display is crimson used as LARGE bold
+     text, where the threshold is 3:1 instead — which buys back enough darkness to
+     read as the print maroon rather than a lightened pink. On the light theme all
+     three are the same value; on dark none of them can be. */
   --navy: #1a2d5a;
   --navy-mid: #2a4080;
-  --crimson: #b91c3a;        /* white on it: 6.4:1 */
-  --crimson-text: #b91c3a;   /* on --bg: 6.0:1 */
+  --crimson: #b91c3a;          /* white on it: 6.4:1 */
+  --crimson-text: #b91c3a;     /* on --bg: 6.0:1 */
+  --crimson-display: #812e35;  /* the maroon — on --bg: 8.3:1 */
   --crimson-soft: rgba(185, 28, 58, 0.1);
 
   /* Surfaces */
@@ -100,11 +104,19 @@
        the text, which turned every button salmon AND dropped white-on-button to
        2.98:1, below AA. Both problems were the one token doing two jobs. */
     --crimson: #b91c3a;
-    /* Crimson as text on #0a0e1a. The print crimson is 3.0:1 here, so this is
-       the same hue (348°) lifted just far enough to clear AA at 4.6:1, and
-       held at 50% saturation so it reads as the brand red rather than pink. */
-    --crimson-text: #c7576d;
-    --crimson-soft: rgba(199, 87, 109, 0.16);
+    /* Small crimson text on #0a0e1a, where 4.5:1 is the bar. That bar sets the
+       lightness at ~57%, and no red that light can read as maroon — so the pink
+       is pushed out sideways instead: hue moved off 348° (the rose end) to 356°
+       and saturation up, which reads warmer at the same luminance. 4.8:1. */
+    --crimson-text: #cd5b63;
+    /* Large bold crimson — the wordmark. The maroon this mirrors, #812e35, is
+       2.18:1 here: below even the 3:1 large-text floor, so on this background it
+       is not a colour the wordmark can be. This is that maroon's own hue and
+       saturation (355°, 47%) lifted 12 points of lightness — the darkest it goes
+       while staying legible, at 3.2:1. Light mode gets the literal value.
+       This is the token to reach for whenever the red is display-sized. */
+    --crimson-display: #ac3e47;
+    --crimson-soft: rgba(205, 91, 99, 0.16);
 
     --answer-bg: #131a2b;
     --answer-bg-sunken: #0e1422;
@@ -159,13 +171,20 @@ body {
   flex-direction: column;
   align-items: center;
   width: 100%;
-  padding: var(--space-5) var(--space-5) var(--space-8);
+  /* The insets are what viewport-fit=cover costs: the background is wanted under
+     the notch and the home indicator, the text is not. env() is 0 wherever there
+     is no inset, so this is the same padding as before on a desktop. */
+  padding:
+    calc(var(--space-5) + env(safe-area-inset-top))
+    calc(var(--space-5) + env(safe-area-inset-right))
+    calc(var(--space-8) + env(safe-area-inset-bottom))
+    calc(var(--space-5) + env(safe-area-inset-left));
   justify-content: center;
 }
 
 .tca-main[data-conversation='true'] {
   justify-content: flex-start;
-  padding-top: 48px;
+  padding-top: calc(48px + env(safe-area-inset-top));
 }
 
 .tca-column {
@@ -195,7 +214,9 @@ body {
 
 .tca-wordmark b {
   font-weight: 600;
-  color: var(--crimson-text);
+  /* Display-sized: clamp(28px, 7vw, 48px) at 600 clears the large-text
+     threshold at every viewport, so it takes the darker token. */
+  color: var(--crimson-display);
 }
 
 .tca-tagline {
@@ -216,7 +237,55 @@ body {
 
 .tca-bg-glow {
   position: fixed;
-  inset: 0;
+  /* Not inset: 0. A fixed box is sized to the SMALL viewport — the one that
+     assumes the browser's dynamic toolbar is showing — while the canvas behind
+     it, painted flat from html/body, is the whole screen. Anywhere this layer
+     stops short, that flat colour shows through: a band across the status bar
+     and another across the home indicator, both of which survive any amount of
+     fiddling with theme-color because neither one is browser chrome.
+     100lvh is the tallest the viewport ever gets, and the insets take it the
+     rest of the way out under the notch. Overshooting is free — the layer is a
+     soft gradient with no hard edge to reveal. */
+  left: 0;
+  right: 0;
+  top: calc(-1 * env(safe-area-inset-top));
+  /* vh first as the fallback, and on iOS it is the right answer anyway: 100vh
+     there has always meant the large viewport. Without it, an engine that does
+     not know lvh drops the declaration, and a fixed box with no height and no
+     content collapses — losing the glow altogether rather than a band of it. */
+  height: calc(100vh + env(safe-area-inset-top) + env(safe-area-inset-bottom));
+  height: calc(100lvh + env(safe-area-inset-top) + env(safe-area-inset-bottom));
+  /* Fades to nothing across the safe areas, so the page's own top and bottom
+     edges are exactly var(--bg) — the same flat colour as the strip iOS paints
+     behind the status bar and the home indicator, whichever layer that strip
+     actually belongs to. Three attempts went into identifying the layer; this
+     stops trying, and removes the difference the seam was made of instead.
+     The fade is the inset plus 24px, so a desktop — where the insets are 0 —
+     loses only 24px off the top of the glow and looks unchanged. */
+  --edge-fade-top: calc(env(safe-area-inset-top) + 24px);
+  /* 0 on a pointer device, so a desktop keeps the crimson glow in the bottom
+     corner at full strength. Raised for touch below, where the browser's own bar
+     is what the page edge has to meet. */
+  --edge-fade-bottom: 0px;
+  /* The transparent stop is pulled up by the bottom inset instead of sitting at
+     100%: this layer extends below the screen on purpose, and a fade that only
+     finishes at its own bottom edge never finishes anywhere you can see. That,
+     plus a 24px fade being far shorter than the bar it had to cover, is why the
+     top edge came good and the bottom did not. */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--edge-fade-top),
+    #000 calc(100% - env(safe-area-inset-bottom) - var(--edge-fade-bottom)),
+    transparent calc(100% - env(safe-area-inset-bottom))
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--edge-fade-top),
+    #000 calc(100% - env(safe-area-inset-bottom) - var(--edge-fade-bottom)),
+    transparent calc(100% - env(safe-area-inset-bottom))
+  );
   pointer-events: none;
   z-index: 0;
   background:
@@ -233,6 +302,13 @@ body {
   }
 }
 
+@media (hover: none) {
+  /* Long enough to cover a browser's bottom bar and then some. The inset is no
+     guide to how much of the edge has to go flat — env() reports 0 for it while
+     that bar is on screen, which is exactly when the edge is visible. */
+  .tca-bg-glow { --edge-fade-bottom: 96px; }
+}
+
 /* ── Search ─────────────────────────────────────────────────────────────── */
 
 .tca-search-wrap {
@@ -243,9 +319,12 @@ body {
 
 .tca-search-input {
   width: 100%;
-  /* The fill is painted by .tca-ghost underneath, so the grey completion on
-     that layer shows through. */
-  background: transparent;
+  /* Opaque, and the completion layer sits ABOVE it. The reverse — a transparent
+     input over a layer painting both the fill and the grey text — reads fine but
+     puts the input on top of the one thing a phone has to be able to tap, and an
+     input hit-tests across its whole box. Painting the fill here is what lets
+     the completion take a tap. */
+  background: var(--surface);
   position: relative;
   z-index: 1;
   border: 1.5px solid var(--border);
@@ -268,8 +347,9 @@ body {
 
 /* Inline completion.
 
-   The grey text lives in a layer beneath the input, and the input's background
-   is painted on this layer instead so the text shows through. Both layers share
+   The grey text lives in a transparent layer directly above the input, so the
+   completion can own the taps that land on it while everything else falls
+   through to the input below. Both layers share
    every metric that affects where a glyph lands — font, size, weight, letter
    spacing, padding, border width — because the alignment is achieved by
    rendering the typed portion invisibly here and letting it push the grey part
@@ -279,8 +359,10 @@ body {
 .tca-ghost {
   position: absolute;
   inset: 0;
-  z-index: 0;
-  background: var(--surface);
+  /* Above the input, and transparent — it paints grey text and nothing else, so
+     the input's own text and caret are never covered. */
+  z-index: 2;
+  background: transparent;
   border: 1.5px solid transparent;
   border-radius: var(--radius-pill);
   padding: 18px 64px 18px 26px;
@@ -290,7 +372,11 @@ body {
   letter-spacing: normal;
   white-space: pre;
   overflow: hidden;
-  text-overflow: ellipsis;
+  /* Emphatically NOT text-overflow: ellipsis. The ellipsis is generated by this
+     block, not by the spans inside it, so `visibility: hidden` on the typed span
+     does not suppress it — the layer painted a stray "…" over the input for any
+     value long enough to overflow, and it stayed there after a completion was
+     accepted. The input does its own clipping; this layer only has to clip. */
   pointer-events: none;
   /* The form and column centre their text, and an input's UA default is
      `start` — so the input ignores that inheritance and this layer would not.
@@ -315,11 +401,32 @@ body {
 
 .tca-ghost-completion {
   color: var(--text-dim);
+  white-space: pre;
+  /* Containing block for the TAB pill and the accept button, both of which are
+     taken out of flow below. */
+  position: relative;
+}
+
+/* The accept target, and on a touch screen the only one there is — no soft
+   keyboard offers Tab. Out of flow and sized to its parent, so it covers exactly
+   the grey text without being inline-level: an in-flow box here would set the
+   line's ascent and shift every glyph on this layer, the same trap documented on
+   .tca-ghost-key below. A real button rather than a click handler on the span,
+   because iOS only synthesises click events for elements it considers
+   interactive. The negative margins buy a 37px-tall target out of 21px of text
+   while leaving the layout untouched; .tca-ghost's padding box is 24px taller
+   than the line, so its overflow clip never reaches this. */
+.tca-ghost-accept {
+  position: absolute;
+  inset: 0;
+  margin: -8px -6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  /* .tca-ghost opts every descendant out, so the one target opts back in. */
   pointer-events: auto;
   cursor: pointer;
-  white-space: pre;
-  /* Containing block for the TAB pill, which is taken out of flow below. */
-  position: relative;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Out of flow on purpose. In flow it is an inline-block standing ~0.75px taller
@@ -345,9 +452,53 @@ body {
   white-space: pre;
 }
 
-/* No Tab key to press, and the hint would just be noise. */
+/* The suggestion as a row beneath the box — the touch counterpart to the inline
+   grey text, which a phone is too narrow to hold. Hidden by default and switched
+   on where there is no hover. Overlays what follows it rather than displacing it,
+   so a suggestion appearing mid-sentence does not move the page. */
+.tca-suggest-row {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.35;
+  text-align: start;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tca-suggest-row:active { background: var(--surface-hover); }
+
+.tca-suggest-row-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.tca-suggest-row svg {
+  flex-shrink: 0;
+  color: var(--crimson-text);
+}
+
 @media (hover: none) {
+  /* No Tab key to press, so the hint would just be noise. */
   .tca-ghost-key { display: none; }
+
+  /* The inline completion is what cannot fit; the row replaces it outright. */
+  .tca-ghost-completion { display: none; }
+
+  .tca-suggest-row { display: flex; }
 }
 
 .tca-search-input::placeholder { color: var(--text-dim); }
@@ -360,6 +511,9 @@ body {
 
 .tca-search-btn {
   position: absolute;
+  /* Above the completion layer, which now outranks an auto z-index. Without this
+     a long completion's TAB pill paints over the button. */
+  z-index: 3;
   right: 8px;
   top: 50%;
   transform: translateY(-50%);
@@ -894,7 +1048,13 @@ body {
   z-index: 1;
   text-align: center;
   padding: var(--space-4) var(--space-5) max(24px, env(safe-area-inset-bottom, 24px));
-  border-top: 1px solid var(--border);
+  /* No rule at all. This was a full-width 1px border, which closed a strip off
+     against the bottom of the screen and made the footer read as a band bolted
+     on below the page rather than the end of it — worst on a phone, where it
+     lands just above the browser's own bar. Fading it at the ends was not
+     enough: 60% of the width was still a crisp line. The 40px of margin below
+     the content is what separates the footer now, and space separates without
+     drawing anything. */
   margin-top: var(--space-8);
   flex-shrink: 0;
   font-size: 12px;

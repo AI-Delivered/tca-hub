@@ -25,7 +25,12 @@ const csp = [
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "object-src 'none'",
-  "upgrade-insecure-requests",
+  // Production only. In dev this directive makes the app untestable on a real
+  // phone: the device loads http://<lan-ip>:3000, every subresource is upgraded
+  // to https, the dev server does not speak it, and the page arrives as bare
+  // unstyled HTML. It never shows up on the desktop because localhost is a
+  // trustworthy origin and is exempt from the upgrade.
+  ...(process.env.NODE_ENV === 'production' ? ["upgrade-insecure-requests"] : []),
 ].join('; ')
 
 const securityHeaders = [
@@ -38,6 +43,13 @@ const securityHeaders = [
 ]
 
 const nextConfig: NextConfig = {
+  // Hosts allowed to reach the dev server's own resources — the HMR socket
+  // above all. Without the LAN address here a phone loads the app fine but
+  // never receives an update, so it sits on whatever bundle it happened to
+  // fetch: a transient compile error stays on screen as a dead page long
+  // after the desktop has recovered. Dev only; ignored in a build.
+  allowedDevOrigins: ['192.168.1.37', '*.local'],
+
   // Stops advertising the framework version to anyone scanning for known CVEs.
   poweredByHeader: false,
   reactStrictMode: true,

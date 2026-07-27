@@ -329,22 +329,12 @@ function BudgetPanel({ budget }: { budget: Budget | null }) {
 function UsagePanel({ usage, internalCost }: { usage: Usage | null; internalCost: number }) {
   if (!usage) return null
 
-  if (!usage.configured) {
-    return (
-      <Section title="Anthropic usage">
-        <div className="nerd-note">
-          Not connected. Set <code>ANTHROPIC_ADMIN_KEY</code> to an{' '}
-          <a href="https://platform.claude.com/settings/admin-keys" target="_blank" rel="noopener noreferrer" style={{ color: '#89b4f7' }}>
-            Admin API key
-          </a>{' '}
-          (<code>sk-ant-admin01-…</code> — not your regular API key) to show what Anthropic actually
-          billed alongside this app&rsquo;s own estimate. Optionally set{' '}
-          <code>ANTHROPIC_ADMIN_API_KEY_ID</code> to the <code>apikey_…</code> id this app uses, so
-          token counts cover only TCA Hub instead of the whole organization.
-        </div>
-      </Section>
-    )
-  }
+  // Nothing at all until an admin key exists. This used to render setup
+  // instructions, which made an optional panel look like an outstanding chore
+  // every time the dashboard was opened. The panel is worth having and the
+  // wiring still works — it just shouldn't nag. Setting ANTHROPIC_ADMIN_KEY
+  // brings it back with no code change; .env.example documents how.
+  if (!usage.configured) return null
 
   if (usage.error) {
     return (
