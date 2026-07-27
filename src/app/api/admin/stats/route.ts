@@ -87,6 +87,26 @@ function categorize(query: string) {
   return c ?? CATEGORIES[CATEGORIES.length - 1]
 }
 
+/* Where the knowledge base comes from, and whether it is still arriving.
+ *
+ * Every failure this app has had in practice has been a silent one: an ingest
+ * route that returned 0 and said nothing, feeds that were removed from the
+ * config while their chunks stayed in the database for weeks, a school calendar
+ * that stopped publishing after May. None of it was visible anywhere — the
+ * dashboard could tell you a question got a thin answer but never that the
+ * content behind it was four days stale or last year's.
+ *
+ * `maxAgeHours` is what "fresh" means for each source, derived from its cron in
+ * vercel.json plus room for one missed run. */
+const SOURCES: { key: string; label: string; pattern: string; maxAgeHours: number; note: string }[] = [
+  { key: 'athletics', label: 'Athletics schedule (GoBound)', pattern: '%gobound%', maxAgeHours: 12, note: 'ingest-calendar every 4h, ingest-bound daily' },
+  { key: 'teamreach', label: 'Team feeds (TeamReach)', pattern: '%teamreach%', maxAgeHours: 12, note: 'ingest-ical every 6h — the only source of practice times' },
+  { key: 'calendars', label: 'School calendars', pattern: '%-calendar%', maxAgeHours: 12, note: 'ingest-ical every 6h' },
+  { key: 'staff', label: 'Staff directories', pattern: '%staff-directory%', maxAgeHours: 24 * 8, note: 'ingest-staff weekly' },
+  { key: 'documents', label: 'Documents & PDFs', pattern: '%resource-manager%', maxAgeHours: 24 * 8, note: 'ingest-pdfs weekly' },
+  { key: 'documents_cdn', label: 'Documents (Finalsite CDN)', pattern: '%finalsite.net%', maxAgeHours: 24 * 8, note: 'ingest-pdfs weekly' },
+]
+
 interface LogRow {
   id: number
   query: string
@@ -339,10 +359,45 @@ export async function GET(req: Request) {
     }
   }
 
+  // Freshness per source. Two cheap reads each: an exact count, and the single
+  // most recent row, which is what says whether the cron is still landing.
+  const sources = await Promise.all(
+    SOURCES.map(async src => {
+      const [{ count }, { data: newest }] = await Promise.all([
+        supabase.from('page_chunks').select('id', { count: 'exact', head: true }).ilike('url', src.pattern),
+        supabase
+          .from('page_chunks')
+          .select('crawled_at')
+          .ilike('url', src.pattern)
+          .order('crawled_at', { ascending: false, nullsFirst: false })
+          .limit(1),
+      ])
+      const lastCrawled = newest?.[0]?.crawled_at ?? null
+      const ageHours = lastCrawled ? (Date.now() - Date.parse(lastCrawled)) / 3_600_000 : null
+      return {
+        key: src.key,
+        label: src.label,
+        note: src.note,
+        chunks: count ?? 0,
+        lastCrawled,
+        ageHours,
+        // Empty is its own state: "the scraper ran and found nothing" and "this
+        // source is hours behind" need different fixes, and an off-season sport
+        // is neither.
+        status:
+          (count ?? 0) === 0 ? 'empty'
+          : ageHours == null ? 'unknown'
+          : ageHours > src.maxAgeHours ? 'stale'
+          : 'ok',
+      }
+    })
+  )
+
   return Response.json({
     days,
     total,
     budget,
+    sources,
     // Headline counts stay historical — they describe the window, not the to-do
     // list. The lists below are the to-do list, and drop anything since fixed.
     noResultCount: allNoResults.length,

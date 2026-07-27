@@ -1188,7 +1188,11 @@ body {
      rendering bug; the fade is done by ::after below the header instead, where
      there is nothing to collide with. */
   background: var(--nerd-bg);
-  padding: clamp(16px, 5vw, 28px) 0 12px;
+  /* The title used to start 16px from the top of the viewport on a phone,
+     which reads as clipped rather than as a margin — and on an installed PWA
+     it lands under the status bar. The safe-area inset is 0 everywhere it
+     isn't needed, so it costs nothing on desktop. */
+  padding: calc(clamp(22px, 5vw, 30px) + env(safe-area-inset-top, 0px)) 0 14px;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -1491,6 +1495,395 @@ body {
   border-radius: 4px;
   color: var(--nerd-text);
   overflow-wrap: anywhere;
+}
+
+/* ── Source health ── */
+.nerd-sources-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 10px;
+}
+
+.nerd-source {
+  background: var(--nerd-surface);
+  border: 1px solid var(--nerd-line);
+  border-radius: 14px;
+  padding: 13px 15px;
+  min-width: 0;
+}
+
+.nerd-source-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 7px;
+}
+
+.nerd-source-label { font-size: 13px; font-weight: 600; }
+
+.nerd-source-stats {
+  font-size: 12px;
+  color: var(--nerd-muted);
+  font-variant-numeric: tabular-nums;
+}
+.nerd-source-stats strong { color: var(--nerd-text); }
+.nerd-source-sep { margin: 0 6px; opacity: 0.5; }
+
+.nerd-source-note {
+  font-size: 11px;
+  color: var(--nerd-dim);
+  margin-top: 5px;
+  line-height: 1.45;
+}
+
+/* ── Query explorer ──────────────────────────────────────────────────────
+
+   A log viewer rather than a table: rows are one line until you open one, and
+   an open row is a document — the whole answer, the pages it came from, and
+   the numbers behind it. Tables lost here because the answer is the widest
+   possible column and the only one that matters. */
+
+.nerd-explorer {
+  background: var(--nerd-surface);
+  border: 1px solid var(--nerd-line);
+  border-radius: 14px;
+  padding: 12px;
+  /* The content-gap shortcuts scroll to this element; without the offset it
+     lands underneath the sticky header. Tracks the header's own
+     clamp(16px, 5vw, 28px) padding, plus a little air — measured 92px at
+     desktop, about 72px on a phone. */
+  scroll-margin-top: clamp(84px, 14vw, 104px);
+}
+
+.nerd-explorer-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.nerd-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.nerd-search-icon {
+  position: absolute;
+  left: 12px;
+  font-size: 15px;
+  color: var(--nerd-dim);
+  pointer-events: none;
+}
+
+.nerd-search-input {
+  width: 100%;
+  /* 16px: anything smaller and iOS Safari zooms the page on focus. */
+  font-size: 16px;
+  font-family: inherit;
+  color: var(--nerd-text);
+  background: var(--nerd-bg);
+  border: 1px solid var(--nerd-line-hi);
+  border-radius: 10px;
+  padding: 9px 40px 9px 32px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.nerd-search-input:focus { border-color: var(--nerd-info); }
+.nerd-search-input::placeholder { color: var(--nerd-dim); }
+.nerd-search-input::-webkit-search-cancel-button { filter: invert(0.6); }
+
+.nerd-kbd {
+  position: absolute;
+  right: 10px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  color: var(--nerd-dim);
+  border: 1px solid var(--nerd-line-hi);
+  border-radius: 5px;
+  padding: 1px 6px;
+  pointer-events: none;
+}
+/* The hint is for a pointer-and-keyboard machine; on a touch screen it's just
+   a symbol sitting in the corner of the field. */
+@media (hover: none) { .nerd-kbd { display: none; } }
+
+.nerd-select {
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--nerd-text);
+  background: var(--nerd-bg);
+  border: 1px solid var(--nerd-line-hi);
+  border-radius: 10px;
+  padding: 9px 10px;
+  cursor: pointer;
+  outline: none;
+}
+.nerd-select:focus { border-color: var(--nerd-info); }
+
+.nerd-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.nerd-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  /* Symmetric: the chips are a band between the search row and the results,
+     and a bottom margin of 0 left them crowding whatever came next. */
+  margin: 12px 0 14px;
+}
+
+.nerd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--nerd-line-hi);
+  background: transparent;
+  color: var(--nerd-muted);
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.nerd-chip:hover:not(:disabled) { background: var(--nerd-surface-hi); color: var(--nerd-text); }
+.nerd-chip[aria-pressed='true'] {
+  background: var(--nerd-accent);
+  border-color: var(--nerd-accent);
+  color: #fff;
+}
+/* Kept in place rather than hidden — a filter row that reorders itself every
+   time you click it is disorienting. */
+.nerd-chip:disabled { opacity: 0.35; cursor: default; }
+
+.nerd-chip-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.nerd-explorer-count {
+  font-size: 11.5px;
+  color: var(--nerd-dim);
+  margin: 14px 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.nerd-entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--nerd-line);
+}
+
+.nerd-entry { border-bottom: 1px solid var(--nerd-line); }
+.nerd-entry[data-expanded] { background: rgba(255, 255, 255, 0.02); }
+
+.nerd-entry-head {
+  display: flex;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+  padding: 11px 6px;
+  border-radius: 8px;
+}
+.nerd-entry-head:hover { background: var(--nerd-surface-hi); }
+.nerd-entry-head:focus-visible { outline: 2px solid var(--nerd-info); outline-offset: -2px; }
+
+.nerd-entry-caret {
+  color: var(--nerd-dim);
+  font-size: 11px;
+  line-height: 1.6;
+  flex: none;
+}
+
+.nerd-entry-main { min-width: 0; flex: 1; }
+
+.nerd-entry-query {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* The metadata strip is scannable only if it stays one line per row on a wide
+   screen and wraps rather than truncates on a narrow one. */
+.nerd-entry-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 10px;
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--nerd-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.nerd-badges { display: inline-flex; gap: 5px; flex-wrap: wrap; }
+
+.nerd-badge {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 2px 7px;
+  border-radius: 100px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.nerd-entry-detail {
+  padding: 4px 6px 16px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.nerd-entry-block {
+  background: var(--nerd-bg);
+  border: 1px solid var(--nerd-line);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.nerd-entry-block-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.nerd-entry-block-title {
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--nerd-dim);
+  font-weight: 600;
+}
+
+/* The answer as the parent saw it — same markdown, so the same shape. */
+.nerd-answer {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--nerd-text);
+  overflow-wrap: anywhere;
+}
+.nerd-answer > :first-child { margin-top: 0; }
+.nerd-answer > :last-child { margin-bottom: 0; }
+.nerd-answer p { margin: 0 0 9px; }
+.nerd-answer ul,
+.nerd-answer ol { margin: 0 0 9px; padding-left: 20px; }
+.nerd-answer li { margin-bottom: 3px; }
+.nerd-answer a { color: var(--nerd-info); }
+.nerd-answer strong { color: #fff; }
+.nerd-answer h1,
+.nerd-answer h2,
+.nerd-answer h3,
+.nerd-answer h4 { font-size: 14px; margin: 12px 0 6px; }
+.nerd-answer code {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.07);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.nerd-answer table { border-collapse: collapse; font-size: 12.5px; display: block; overflow-x: auto; }
+.nerd-answer th,
+.nerd-answer td { border: 1px solid var(--nerd-line); padding: 5px 9px; text-align: left; }
+
+.nerd-sources {
+  list-style: decimal;
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.nerd-sources a { color: var(--nerd-info); overflow-wrap: anywhere; }
+.nerd-source-url {
+  display: block;
+  font-size: 11px;
+  color: var(--nerd-dim);
+  overflow-wrap: anywhere;
+}
+
+/* Label/value pairs rather than a table: the values are wildly different
+   lengths, and a two-column grid keeps the labels aligned without forcing the
+   long ones onto their own line. */
+.nerd-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 2px 20px;
+  margin: 0;
+}
+
+.nerd-field {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12.5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.nerd-field dt {
+  color: var(--nerd-dim);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding-top: 2px;
+}
+.nerd-field dd {
+  margin: 0;
+  color: var(--nerd-muted);
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+.nerd-entry-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.nerd-more {
+  width: 100%;
+  margin-top: 12px;
+  background: transparent;
+  border: 1px dashed var(--nerd-line-hi);
+  color: var(--nerd-muted);
+  border-radius: 10px;
+  padding: 11px;
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.nerd-more:hover:not(:disabled) { background: var(--nerd-surface-hi); color: var(--nerd-text); }
+.nerd-more:disabled { opacity: 0.5; cursor: default; }
+
+@media (max-width: 560px) {
+  /* The detail panel's left inset lines it up under the row's caret, which is
+     a luxury a 390px screen can't afford. */
+  .nerd-entry-detail { padding-left: 6px; }
+  .nerd-field { grid-template-columns: 1fr; gap: 0; }
 }
 
 /* ── Model split bar ── */

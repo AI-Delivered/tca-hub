@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
+import { storeChunks } from '@/lib/ingest-chunks'
 
 export const maxDuration = 300
 
@@ -47,6 +48,30 @@ const FEEDS = [
     source: 'https://www.tcatitans.org/schools/high-school/high-school-calendar',
     label: 'High School Calendar',
     deletePattern: '%high-school-calendar%',
+  },
+
+  // TeamReach — the coaches' own feeds, and the only source for practice times.
+  // These were missing from this list while the rest of the file still carried
+  // full TeamReach handling (`isTeamreach`, the Practices/Games/Events
+  // grouping): dead code on one side, and on the other, eight chunks left in
+  // the database from whenever the feeds were last removed. Nothing refreshed
+  // them and nothing deleted them, because the athletics delete pattern is
+  // '%gobound%ical%' and these URLs are api.teamreach.net — so the football
+  // practice schedule a parent got answered from was a July 23 snapshot whose
+  // searchable portion was the 2018 season.
+  {
+    url: 'https://api.teamreach.net/api/events/teams/20623/ical',
+    source: 'https://api.teamreach.net/api/events/teams/20623/ical',
+    label: 'TCA HS Football',
+    deletePattern: '%teamreach.net/api/events/teams/20623%',
+    teamreach: true,
+  },
+  {
+    url: 'https://api.teamreach.net/api/events/teams/161822/ical',
+    source: 'https://api.teamreach.net/api/events/teams/161822/ical',
+    label: 'TCA JH Football',
+    deletePattern: '%teamreach.net/api/events/teams/161822%',
+    teamreach: true,
   },
 ]
 
@@ -156,7 +181,31 @@ export async function GET(req: NextRequest) {
       return 'Events'
     }
 
-    for (const e of events) {
+    // Only events worth answering from. The TeamReach feeds carry the team's
+    // entire history — "TCA HS Football — Practices & Training" ran to 111,838
+    // characters covering June 2018 to August 2026 — and the grouped chunks
+    // below used to be built from all of it, unfiltered. Two things went wrong
+    // as a result:
+    //
+    //   1. Only the first 16,000 characters of a chunk were ever embedded, and
+    //      the feed is in date order, so the searchable portion of the football
+    //      practice schedule was 2018-2019. The current season sat at the end,
+    //      findable by nothing.
+    //   2. Even fixed, embedding eight years of finished practices just fills
+    //      the corpus with events that have already happened.
+    //
+    // A short backward window keeps "was there practice yesterday" answerable;
+    // everything older is history nobody asks about.
+    const RECENT_DAYS = 14
+    const HORIZON_DAYS = 365
+    const windowStart = new Date(Date.now() - RECENT_DAYS * 24 * 60 * 60 * 1000)
+    const windowEnd = new Date(Date.now() + HORIZON_DAYS * 24 * 60 * 60 * 1000)
+    const relevant = events.filter(e => {
+      const d = parseDate(e.start)
+      return d >= windowStart && d <= windowEnd
+    })
+
+    for (const e of relevant) {
       let key: string
       if (isAthletics) {
         const sexLabel = e.sex === 'female' ? ' (Girls)' : e.sex === 'male' ? ' (Boys)' : ''
@@ -243,14 +292,20 @@ export async function GET(req: NextRequest) {
 
     let inserted = 0
     for (const chunk of chunks) {
-      const embRes = await voyage.embed({ input: [chunk.content.slice(0, 16000)], model: 'voyage-3-lite' })
-      const embedding = embRes.data?.[0]?.embedding
-      if (!embedding) continue
-      const { error } = await supabase.from('page_chunks').insert({ ...chunk, embedding, crawled_at: now })
-      if (!error) inserted++
+      // Chunked rather than one row per group, so a long season is searchable
+      // all the way through instead of only as far as the first embedding
+      // reached — see src/lib/ingest-chunks.ts.
+      const stored = await storeChunks(supabase, voyage, chunk, now)
+      inserted += stored.inserted
     }
 
-    results.push({ feed: feed.label, events: events.length, groups: Object.keys(groups).length, chunksInserted: inserted })
+    results.push({
+      feed: feed.label,
+      events: events.length,
+      inWindow: relevant.length,
+      groups: Object.keys(groups).length,
+      chunksInserted: inserted,
+    })
   }
 
   return NextResponse.json({ results })

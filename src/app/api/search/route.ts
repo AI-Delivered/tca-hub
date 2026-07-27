@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { getCache } from '@vercel/functions'
 import { queryKey } from '@/lib/query-key'
+import { logQuery } from '@/lib/query-log'
 import { rateLimit, tooManyRequests } from '@/lib/rate-limit'
 import { secretMatches } from '@/lib/auth'
 
@@ -229,7 +230,7 @@ export async function POST(req: NextRequest) {
 
   const encoder = new TextEncoder()
   const send = (obj: unknown) => encoder.encode(JSON.stringify(obj) + '\n')
-  const logQuery = (rawQuery ?? query).trim().slice(0, 500)
+  const loggedQuery = (rawQuery ?? query).trim().slice(0, 500)
 
   // Follow-ups depend on what was said earlier, so only standalone questions are
   // cacheable. Debug runs bypass the cache so measurements reflect real retrieval.
@@ -244,18 +245,22 @@ export async function POST(req: NextRequest) {
     } catch { /* cache unavailable — answer the question the slow way */ }
 
     if (hit?.answer) {
-      const supabaseLog = getSupabaseAdmin()
-      supabaseLog.from('query_log').insert({
-        query: logQuery,
+      // `model` records who originally generated this answer, not 'cache' —
+      // a cached Sonnet answer is still a Sonnet answer, and cache_hit is what
+      // says it cost nothing this time round.
+      logQuery(getSupabaseAdmin(), {
+        query: loggedQuery,
         had_results: true,
         source_count: hit.sources.length,
         top_similarity: null,
-        model: 'cache',
+        model: hit.model ?? 'cache',
         latency_ms: Date.now() - requestStart,
-        answer_preview: hit.answer.slice(0, 2000),
+        answer: hit.answer,
+        sources: hit.sources,
+        cache_hit: true,
         input_tokens: 0,
         output_tokens: 0,
-      }).then(() => {})
+      })
 
       const cachedStream = new ReadableStream({
         start(controller) {
@@ -499,15 +504,17 @@ export async function POST(req: NextRequest) {
 
   if (!merged?.length) {
     const noResultsAnswer = "I couldn't find information about that on the TCA website. Try rephrasing your question or visit tcatitans.org directly."
-    supabase.from('query_log').insert({
-      query: logQuery,
+    logQuery(supabase, {
+      query: loggedQuery,
       had_results: false,
       source_count: 0,
       top_similarity: null,
       model: null,
       latency_ms: Date.now() - requestStart,
-      answer_preview: noResultsAnswer,
-    }).then(() => {})
+      answer: noResultsAnswer,
+      sources: [],
+      cache_hit: false,
+    })
 
     const stream = new ReadableStream({
       start(controller) {
@@ -869,17 +876,19 @@ Answer style:
       // Log query + answer (fire and forget — never blocks the response).
       // A failed generation is logged as its own model so an outage shows up on
       // the dashboard instead of looking like a normal answer.
-      supabase.from('query_log').insert({
-        query: logQuery,
+      logQuery(supabase, {
+        query: loggedQuery,
         had_results: true,
         source_count: merged.length,
         top_similarity: topSimilarity,
         model: failure ? `${MODEL}-failed` : MODEL,
         latency_ms: Date.now() - requestStart,
-        answer_preview: answerText.slice(0, 2000),
+        answer: answerText,
+        sources,
+        cache_hit: false,
         input_tokens: usage?.input_tokens ?? null,
         output_tokens: usage?.output_tokens ?? null,
-      }).then(() => {})
+      })
 
       controller.enqueue(send({ type: 'done' }))
       controller.close()

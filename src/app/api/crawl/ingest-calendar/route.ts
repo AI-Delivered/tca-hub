@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
+import { storeChunks } from '@/lib/ingest-chunks'
 
 export const maxDuration = 300
 
@@ -143,19 +144,20 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const content = fullLines.join('\n').slice(0, 16000)
-    const embRes = await voyage.embed({ input: [content], model: 'voyage-3-lite' })
-    const embedding = embRes.data?.[0]?.embedding
-    if (embedding) {
-      const { error } = await supabase.from('page_chunks').insert({
+    // Was truncated to 16,000 characters outright — the whole-schedule chunk
+    // physically lost every event past that point. Chunked now, so a full
+    // season's athletics calendar survives intact and searchable.
+    const stored = await storeChunks(
+      supabase,
+      voyage,
+      {
         url: CHUNK_URL,
         title: 'TCA Athletics & Activities — Upcoming Schedule',
-        content,
-        embedding,
-        crawled_at: now,
-      })
-      if (!error) chunksInserted++
-    }
+        content: fullLines.join('\n'),
+      },
+      now
+    )
+    chunksInserted += stored.inserted
   } catch (e) {
     console.error('Full schedule chunk error:', e)
   }
@@ -180,17 +182,13 @@ export async function GET(req: NextRequest) {
     const chunkUrl = `${CHUNK_URL}#${sport.toLowerCase().replace(/\s+/g, '-')}`
 
     try {
-      const embRes = await voyage.embed({ input: [content.slice(0, 16000)], model: 'voyage-3-lite' })
-      const embedding = embRes.data?.[0]?.embedding
-      if (!embedding) continue
-      const { error } = await supabase.from('page_chunks').insert({
-        url: chunkUrl,
-        title: `TCA ${sport} Schedule`,
-        content,
-        embedding,
-        crawled_at: now,
-      })
-      if (!error) chunksInserted++
+      const stored = await storeChunks(
+        supabase,
+        voyage,
+        { url: chunkUrl, title: `TCA ${sport} Schedule`, content },
+        now
+      )
+      chunksInserted += stored.inserted
     } catch { /* continue */ }
   }
 

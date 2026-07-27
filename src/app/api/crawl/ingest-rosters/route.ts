@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
+import { storeChunks } from '@/lib/ingest-chunks'
 
 export const maxDuration = 300
 
@@ -138,13 +139,15 @@ export async function GET(req: NextRequest) {
     const title = `TCA ${sport.name} ${SEASON} Roster`
 
     try {
-      const embRes = await voyage.embed({ input: [content.slice(0, 16000)], model: 'voyage-3-lite' })
-      const embedding = embRes.data?.[0]?.embedding
-      if (!embedding) { results.push({ sport: sport.name, status: 'embed-error' }); continue }
+      // A varsity roster fits in one chunk today. A full football roster with
+      // heights, positions and hometowns will not, and the old single-embed
+      // path would have silently made everything past 16,000 characters
+      // unsearchable — see src/lib/ingest-chunks.ts.
+      const stored = await storeChunks(supabase, voyage, { url: chunkUrl, title, content }, now)
+      if (!stored.inserted) { results.push({ sport: sport.name, status: 'embed-error' }); continue }
 
-      const { error } = await supabase.from('page_chunks').insert({ url: chunkUrl, title, content, embedding, crawled_at: now })
-      if (!error) chunksInserted++
-      results.push({ sport: sport.name, players: players.length, status: 'ok', sourceUrl: url })
+      chunksInserted += stored.inserted
+      results.push({ sport: sport.name, players: players.length, chunks: stored.inserted, status: 'ok', sourceUrl: url })
     } catch (e) {
       results.push({ sport: sport.name, status: 'error', error: String(e) })
     }

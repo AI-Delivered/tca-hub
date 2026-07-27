@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
+import { storeChunks } from '@/lib/ingest-chunks'
 
 export const maxDuration = 300
 
@@ -178,14 +179,12 @@ export async function GET(req: NextRequest) {
       const title = `${campus.name} — ${category}`
       const chunkUrl = `${campus.url}#${category.toLowerCase().replace(/[^a-z0-9]/g, '-')}`
 
-      const embRes = await voyage.embed({ input: [content.slice(0, 16000)], model: 'voyage-3-lite' })
-      const embedding = embRes.data?.[0]?.embedding
-      if (!embedding) continue
-
-      const { error } = await supabase.from('page_chunks').insert({
-        url: chunkUrl, title, content, embedding, crawled_at: now,
-      })
-      if (!error) chunksInserted++
+      // The larger campus directories already run past a single embedding —
+      // High School is 11,633 characters and North Elementary 11,828, so the
+      // next hire or two would have started dropping staff off the searchable
+      // end of the list without anything indicating it.
+      const stored = await storeChunks(supabase, voyage, { url: chunkUrl, title, content }, now)
+      chunksInserted += stored.inserted
     }
 
     // Also keep a summary chunk for "who works at X" queries
@@ -213,18 +212,13 @@ export async function GET(req: NextRequest) {
     }
 
     const summaryContent = summaryLines.join('\n')
-    const summaryEmb = await voyage.embed({ input: [summaryContent.slice(0, 16000)], model: 'voyage-3-lite' })
-    const summaryEmbedding = summaryEmb.data?.[0]?.embedding
-    if (summaryEmbedding) {
-      await supabase.from('page_chunks').insert({
-        url: campus.url,
-        title: `${campus.name} Staff Directory`,
-        content: summaryContent,
-        embedding: summaryEmbedding,
-        crawled_at: now,
-      })
-      chunksInserted++
-    }
+    const summaryStored = await storeChunks(
+      supabase,
+      voyage,
+      { url: campus.url, title: `${campus.name} Staff Directory`, content: summaryContent },
+      now
+    )
+    chunksInserted += summaryStored.inserted
 
     results.push({ campus: campus.name, staff: seen.size, pages: totalPages, chunksInserted })
   }
