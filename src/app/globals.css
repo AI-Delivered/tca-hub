@@ -389,20 +389,6 @@ body {
   box-shadow: none;
 }
 
-.tca-hint {
-  font-size: 12px;
-  color: var(--text-dim);
-}
-
-.tca-hint kbd {
-  font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 11px;
-  background: var(--surface-sunken);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 1px 5px;
-}
-
 /* ── Chips ──────────────────────────────────────────────────────────────── */
 
 .tca-chip-row {

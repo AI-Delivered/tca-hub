@@ -529,19 +529,6 @@ export default function Home() {
     }
   }, [])
 
-  // "/" focuses the search box the way it does everywhere else on the web.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return
-      const el = document.activeElement
-      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return
-      e.preventDefault()
-      inputRef.current?.focus()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
-
   const runSearch = useCallback(async (rawQ: string) => {
     const trimmed = rawQ.trim()
     if (!trimmed || loading) return
@@ -807,10 +794,6 @@ export default function Home() {
                   Staff Directory
                 </a>
               </div>
-
-              <p className="tca-hint">
-                Press <kbd>/</kbd> to search
-              </p>
             </>
           )}
         </div>
