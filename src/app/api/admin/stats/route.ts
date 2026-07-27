@@ -10,6 +10,42 @@ const PRICING = {
   sonnet: { input: 3.0, output: 15.0 },
 }
 
+interface PricedRow {
+  model?: string | null
+  input_tokens?: number | null
+  output_tokens?: number | null
+}
+
+/** Prices a set of logged queries. Rows predating token logging are skipped
+ *  rather than counted as free, and reported separately so a partial total
+ *  can be labelled as one. */
+function priceRows(rows: PricedRow[]) {
+  let cost = 0
+  let sonnetQueries = 0
+  let pricedQueries = 0
+  for (const r of rows) {
+    if (r.input_tokens == null && r.output_tokens == null) continue
+    pricedQueries++
+    const isSonnet = Boolean(r.model?.includes('sonnet'))
+    if (isSonnet) sonnetQueries++
+    const pricing = isSonnet ? PRICING.sonnet : PRICING.haiku
+    cost += ((r.input_tokens ?? 0) / 1_000_000) * pricing.input
+    cost += ((r.output_tokens ?? 0) / 1_000_000) * pricing.output
+  }
+  return { cost, sonnetQueries, pricedQueries }
+}
+
+// Credit burn-down. Anthropic exposes no balance endpoint — remaining credit is
+// a Console-only number — so the budget is a figure you supply and this counts
+// down against it. ANTHROPIC_CREDIT_SINCE resets the baseline after a top-up;
+// without it the count runs over all logged history.
+const CREDIT_BUDGET = Number(process.env.ANTHROPIC_CREDIT_BUDGET) || null
+const CREDIT_SINCE = process.env.ANTHROPIC_CREDIT_SINCE || null
+// Enough rows for roughly a year at current volume. If it ever truncates, the
+// response says so — an understated burn-down that looks precise is the one
+// genuinely dangerous way for this to fail.
+const BUDGET_ROW_LIMIT = 20000
+
 // Maps a failing query to the content category it's most likely asking about,
 // and the crawl route that would actually fix it — so a gap in the dashboard
 // points directly at "run this ingest job" instead of just "something's missing."
@@ -93,7 +129,20 @@ export async function GET(req: Request) {
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
 
   const supabase = getSupabaseAdmin()
-  const [{ data, error }, { data: visitData, error: visitError }] = await Promise.all([
+  // Spend against the budget is deliberately NOT scoped to the selected range —
+  // credit is consumed once, so a burn-down that shrank when you clicked "7d"
+  // would be nonsense. This reads from the top-up baseline forward regardless
+  // of which range the page is showing.
+  const budgetQuery = CREDIT_BUDGET
+    ? supabase
+        .from('query_log')
+        .select('model, input_tokens, output_tokens, created_at')
+        .gte('created_at', CREDIT_SINCE ?? '1970-01-01')
+        .order('created_at', { ascending: false })
+        .limit(BUDGET_ROW_LIMIT)
+    : null
+
+  const [{ data, error }, { data: visitData, error: visitError }, budgetRes] = await Promise.all([
     supabase
       .from('query_log')
       .select('id, query, created_at, had_results, source_count, top_similarity, model, latency_ms, answer_preview, input_tokens, output_tokens')
@@ -106,6 +155,7 @@ export async function GET(req: Request) {
       .gte('created_at', since)
       .order('created_at', { ascending: false })
       .limit(5000),
+    budgetQuery,
   ])
 
   if (error || visitError) {
@@ -245,28 +295,54 @@ export async function GET(req: Request) {
   // blanket single-model estimate.
   const totalInputTokens = rows.reduce((sum, r) => sum + (r.input_tokens ?? 0), 0)
   const totalOutputTokens = rows.reduce((sum, r) => sum + (r.output_tokens ?? 0), 0)
-  let totalCost = 0
-  let sonnetQueries = 0
-  let pricedQueries = 0
-  for (const r of rows) {
-    if (r.input_tokens == null && r.output_tokens == null) continue // pre-instrumentation row — no token data to price
-    pricedQueries++
-    const pricing = r.model?.includes('sonnet') ? PRICING.sonnet : PRICING.haiku
-    if (r.model?.includes('sonnet')) sonnetQueries++
-    totalCost += ((r.input_tokens ?? 0) / 1_000_000) * pricing.input
-    totalCost += ((r.output_tokens ?? 0) / 1_000_000) * pricing.output
-  }
+  const windowCost = priceRows(rows)
   const cost = {
     totalInputTokens,
     totalOutputTokens,
-    totalCost,
-    sonnetQueries,
-    pricedQueries,
+    totalCost: windowCost.cost,
+    sonnetQueries: windowCost.sonnetQueries,
+    pricedQueries: windowCost.pricedQueries,
+  }
+
+  // ── Credit burn-down ──
+  // A projection, not a balance: it answers "when do I run out at this rate",
+  // which is the question a balance is usually a proxy for anyway.
+  let budget = null
+  if (CREDIT_BUDGET) {
+    const budgetRows = (budgetRes?.data ?? []) as (PricedRow & { created_at: string })[]
+    const spent = priceRows(budgetRows).cost
+
+    // Rate comes from the trailing 7 days, not from the whole baseline period —
+    // averaging over months of history would badly lag a recent change in
+    // traffic, which is exactly when the projection matters.
+    const rateWindowStart = Date.now() - 7 * 24 * 60 * 60 * 1000
+    const recent = budgetRows.filter(r => new Date(r.created_at).getTime() >= rateWindowStart)
+    const recentSpend = priceRows(recent).cost
+    // Days of history actually available, so a two-day-old log doesn't get
+    // divided by seven and report a burn rate 3.5x too low.
+    const oldestRecent = recent.length
+      ? Math.min(...recent.map(r => new Date(r.created_at).getTime()))
+      : Date.now()
+    const observedDays = Math.max(0.5, Math.min(7, (Date.now() - oldestRecent) / 86_400_000))
+    const perDay = recent.length ? recentSpend / observedDays : 0
+
+    const remaining = CREDIT_BUDGET - spent
+    budget = {
+      amount: CREDIT_BUDGET,
+      since: CREDIT_SINCE,
+      spent,
+      remaining,
+      perDay,
+      daysLeft: perDay > 0 && remaining > 0 ? remaining / perDay : null,
+      // Signals the total is a floor rather than an exact figure.
+      truncated: budgetRows.length >= BUDGET_ROW_LIMIT,
+    }
   }
 
   return Response.json({
     days,
     total,
+    budget,
     // Headline counts stay historical — they describe the window, not the to-do
     // list. The lists below are the to-do list, and drop anything since fixed.
     noResultCount: allNoResults.length,

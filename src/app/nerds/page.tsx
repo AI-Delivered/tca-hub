@@ -28,6 +28,7 @@ interface Stats {
   resolvedCount: number
   avgLatency: number | null
   p95Latency: number | null
+  budget: Budget | null
   dailyVolume: { date: string; total: number; noResults: number }[]
   topQueries: { query: string; count: number; noResultCount: number }[]
   noContextHitQueries: { query: string; count: number; noResultCount: number }[]
@@ -47,6 +48,16 @@ interface Stats {
     dailyVisits: { date: string; count: number }[]
     queryRate: number | null
   }
+}
+
+interface Budget {
+  amount: number
+  since: string | null
+  spent: number
+  remaining: number
+  perDay: number
+  daysLeft: number | null
+  truncated: boolean
 }
 
 interface Usage {
@@ -251,6 +262,62 @@ function PasswordGate({ onUnlock }: { onUnlock: (key: string) => void }) {
         </button>
       </form>
     </div>
+  )
+}
+
+/* Credit burn-down.
+   Anthropic has no balance endpoint — remaining credit is a Console-only
+   number — so this counts down against a figure supplied via env. It answers
+   "when do I run out at this rate", which is the question a balance is usually
+   standing in for. Spend here ignores the range pills on purpose: credit is
+   consumed once, so a remaining figure that grew when you clicked "7d" would
+   be actively misleading. */
+function BudgetPanel({ budget }: { budget: Budget | null }) {
+  if (!budget) return null
+
+  const pct = Math.min(100, Math.max(0, (budget.spent / budget.amount) * 100))
+  const low = budget.remaining <= budget.amount * 0.2
+  const runningOut = budget.daysLeft != null && budget.daysLeft < 14
+
+  return (
+    <Section title="Credit">
+      <div className="nerd-gap">
+        <div className="nerd-split-head" style={{ alignItems: 'baseline' }}>
+          <span style={{ fontSize: 17, fontWeight: 700 }}>
+            {fmtMoney(budget.spent)}
+            <span style={{ color: '#98a2b4', fontWeight: 400 }}> of {fmtMoney(budget.amount)}</span>
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: low ? '#ff6b6b' : '#5ee6a0' }}>
+            {fmtMoney(Math.max(0, budget.remaining))} left
+          </span>
+        </div>
+
+        <div className="nerd-meter" style={{ height: 10, marginTop: 10 }}>
+          <span style={{ width: `${pct}%`, background: low ? '#ff6b6b' : '#5ee6a0' }} />
+        </div>
+
+        <p className="nerd-card-sub" style={{ marginTop: 10 }}>
+          {budget.perDay > 0
+            ? <>Burning <strong style={{ color: '#eaf0ff' }}>{fmtMoney(budget.perDay)}/day</strong> over the last week
+                {budget.daysLeft != null && (
+                  <> · <strong style={{ color: runningOut ? '#ff6b6b' : '#eaf0ff' }}>
+                    ~{Math.round(budget.daysLeft)} days left
+                  </strong> at that rate</>
+                )}
+              </>
+            : 'No priced queries in the last week — no burn rate to project from.'}
+        </p>
+
+        <p className="nerd-card-sub" style={{ marginTop: 6, color: '#7d8798' }}>
+          Estimated from this app&rsquo;s own token logs, not Anthropic&rsquo;s billing — it misses
+          retries and anything else on the same key, so treat it as a floor.
+          {budget.since
+            ? ` Counting from ${new Date(budget.since).toLocaleDateString()}.`
+            : ' Counting all logged history — set ANTHROPIC_CREDIT_SINCE after a top-up to reset it.'}
+          {budget.truncated && ' Row limit hit — spend is higher than shown.'}
+        </p>
+      </div>
+    </Section>
   )
 }
 
@@ -488,6 +555,8 @@ export default function AdminDashboard() {
               />
               <Card label="Unique visitors" value={String(stats.visits.uniqueVisitors)} sub="by browser, best-effort" />
             </div>
+
+            <BudgetPanel budget={stats.budget} />
 
             <Section title="Daily volume">
               <div className="nerd-chart" role="img" aria-label="Daily query volume">
