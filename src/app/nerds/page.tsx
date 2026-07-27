@@ -49,21 +49,37 @@ interface Stats {
   }
 }
 
+interface Usage {
+  configured: boolean
+  error?: string
+  days?: number
+  scopedToKey?: boolean
+  totalCost?: number
+  totals?: { input: number; output: number; cacheRead: number; cacheWrite: number }
+  cacheHitRate?: number | null
+  dailyCost?: { date: string; cost: number }[]
+  byModel?: { model: string; input: number; output: number; cacheRead: number }[]
+  cached?: boolean
+}
+
 const RANGES = [1, 7, 30, 90]
 
 function fmtMoney(n: number) {
   return n < 0.01 && n > 0 ? '<$0.01' : `$${n.toFixed(2)}`
 }
 
+function fmtTokens(n: number) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
 function Card({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'bad' | 'good' }) {
   return (
-    <div style={{
-      background: '#12182a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12,
-      padding: '16px 18px', minWidth: 150, flex: '1 1 150px',
-    }}>
-      <div style={{ fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.4)', marginBottom: 6 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 700, color: tone === 'bad' ? '#ff6b6b' : tone === 'good' ? '#5ee6a0' : '#fff' }}>{value}</div>
-      {sub && <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.35)', marginTop: 4 }}>{sub}</div>}
+    <div className="nerd-card">
+      <div className="nerd-card-label">{label}</div>
+      <div className="nerd-card-value" data-tone={tone}>{value}</div>
+      {sub && <div className="nerd-card-sub">{sub}</div>}
     </div>
   )
 }
@@ -148,14 +164,9 @@ function CopyPromptButton({ prompt, label = 'Copy fix prompt' }: { prompt: strin
   return (
     <button
       onClick={copy}
+      className="nerd-btn"
+      data-copied={copied}
       title="Copy a self-contained prompt to paste into Claude Code"
-      style={{
-        background: copied ? 'rgba(94,230,160,0.12)' : 'rgba(137,180,247,0.1)',
-        border: `1px solid ${copied ? 'rgba(94,230,160,0.4)' : 'rgba(137,180,247,0.3)'}`,
-        color: copied ? '#5ee6a0' : '#89b4f7',
-        borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 500,
-        cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit', transition: 'all 0.15s',
-      }}
     >
       {copied ? 'Copied ✓' : label}
     </button>
@@ -164,10 +175,10 @@ function CopyPromptButton({ prompt, label = 'Copy fix prompt' }: { prompt: strin
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{ marginTop: 28 }}>
-      <h2 style={{ fontSize: 13, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.45)', marginBottom: 10 }}>{title}</h2>
+    <section className="nerd-section">
+      <h2 className="nerd-section-title">{title}</h2>
       {children}
-    </div>
+    </section>
   )
 }
 
@@ -201,18 +212,19 @@ function PasswordGate({ onUnlock }: { onUnlock: (key: string) => void }) {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0a0e1a', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+    <div className="nerd" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <form onSubmit={submit} style={{ width: '100%', maxWidth: 320, textAlign: 'center' }}>
-        <h1 style={{ fontSize: 18, fontWeight: 700, color: '#eaf0ff', margin: '0 0 6px' }}>Nerds only</h1>
-        <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.4)', margin: '0 0 18px' }}>Query analytics for TCA Hub.</p>
+        <h1 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 6px' }}>Nerds only</h1>
+        <p className="nerd-card-sub" style={{ margin: '0 0 18px' }}>Query analytics for TCA Hub.</p>
         <input
           type="password"
           value={value}
           onChange={e => { setValue(e.target.value); setRejected(false) }}
           placeholder="Password"
           autoFocus
+          aria-label="Dashboard password"
           style={{
-            width: '100%', background: '#12182a', color: '#eaf0ff', fontSize: 14, fontFamily: 'inherit',
+            width: '100%', background: '#12182a', color: '#eaf0ff', fontSize: 16, fontFamily: 'inherit',
             border: `1px solid ${rejected ? 'rgba(255,107,107,0.5)' : 'rgba(255,255,255,0.12)'}`,
             borderRadius: 10, padding: '11px 14px', outline: 'none',
           }}
@@ -222,22 +234,18 @@ function PasswordGate({ onUnlock }: { onUnlock: (key: string) => void }) {
           disabled={checking || !value.trim()}
           style={{
             width: '100%', marginTop: 10, background: '#2a4080', color: '#fff', fontSize: 14, fontWeight: 600,
-            fontFamily: 'inherit', border: 'none', borderRadius: 10, padding: '11px 14px',
+            fontFamily: 'inherit', border: 'none', borderRadius: 10, padding: '12px 14px',
             cursor: checking || !value.trim() ? 'default' : 'pointer', opacity: checking || !value.trim() ? 0.5 : 1,
           }}
         >
           {checking ? 'Checking…' : 'Enter'}
         </button>
         {rejected && <p style={{ color: '#ff6b6b', fontSize: 12, marginTop: 10 }}>Not it.</p>}
-        {unavailable && (
-          <p style={{ color: '#ffb454', fontSize: 12, marginTop: 10, lineHeight: 1.5 }}>
-            {unavailable}
-          </p>
-        )}
+        {unavailable && <p style={{ color: '#ffb454', fontSize: 12, marginTop: 10, lineHeight: 1.5 }}>{unavailable}</p>}
         <button
           type="button"
           onClick={() => setShowHint(true)}
-          style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.35)', fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', marginTop: 14, textDecoration: 'underline' }}
+          style={{ background: 'none', border: 'none', color: '#7d8798', fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', marginTop: 14, textDecoration: 'underline' }}
         >
           {showHint ? 'as soon as…' : 'Hint'}
         </button>
@@ -246,10 +254,123 @@ function PasswordGate({ onUnlock }: { onUnlock: (key: string) => void }) {
   )
 }
 
+/* The Anthropic side of the ledger.
+   Everything else on this page is derived from what the app logged about
+   itself. This panel is the only thing here that Anthropic agrees with, which
+   is exactly why it's worth the extra request: if the two costs disagree, the
+   derived one is the one that's wrong. */
+function UsagePanel({ usage, internalCost }: { usage: Usage | null; internalCost: number }) {
+  if (!usage) return null
+
+  if (!usage.configured) {
+    return (
+      <Section title="Anthropic usage">
+        <div className="nerd-note">
+          Not connected. Set <code>ANTHROPIC_ADMIN_KEY</code> to an{' '}
+          <a href="https://platform.claude.com/settings/admin-keys" target="_blank" rel="noopener noreferrer" style={{ color: '#89b4f7' }}>
+            Admin API key
+          </a>{' '}
+          (<code>sk-ant-admin01-…</code> — not your regular API key) to show what Anthropic actually
+          billed alongside this app&rsquo;s own estimate. Optionally set{' '}
+          <code>ANTHROPIC_ADMIN_API_KEY_ID</code> to the <code>apikey_…</code> id this app uses, so
+          token counts cover only TCA Hub instead of the whole organization.
+        </div>
+      </Section>
+    )
+  }
+
+  if (usage.error) {
+    return (
+      <Section title="Anthropic usage">
+        <div className="nerd-note" data-tone="bad">{usage.error}</div>
+      </Section>
+    )
+  }
+
+  const t = usage.totals ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+  const billed = usage.totalCost ?? 0
+  const maxCost = Math.max(0.0001, ...(usage.dailyCost ?? []).map(d => d.cost))
+  const maxModel = Math.max(1, ...(usage.byModel ?? []).map(m => m.input + m.output))
+
+  // Reconciliation. A gap here is a bug in our pricing table or our token
+  // logging, not in Anthropic's billing — worth surfacing rather than burying.
+  const drift = billed > 0 ? (internalCost - billed) / billed : null
+
+  return (
+    <Section title="Anthropic usage — what was actually billed">
+      <div className="nerd-grid">
+        <Card
+          label="Billed (org)"
+          value={fmtMoney(billed)}
+          sub={`Anthropic cost report · last ${usage.days} days`}
+        />
+        <Card
+          label="This app's estimate"
+          value={fmtMoney(internalCost)}
+          sub={
+            drift == null
+              ? 'from our own token logs'
+              : `${drift >= 0 ? '+' : ''}${(drift * 100).toFixed(0)}% vs billed`
+          }
+          tone={drift != null && Math.abs(drift) > 0.25 ? 'bad' : undefined}
+        />
+        <Card
+          label="Cache hit rate"
+          value={usage.cacheHitRate != null ? `${(usage.cacheHitRate * 100).toFixed(0)}%` : '—'}
+          sub={`${fmtTokens(t.cacheRead)} of input read from cache`}
+          tone={usage.cacheHitRate != null && usage.cacheHitRate > 0.5 ? 'good' : undefined}
+        />
+        <Card
+          label="Tokens"
+          value={fmtTokens(t.input + t.cacheRead + t.output)}
+          sub={`${fmtTokens(t.input + t.cacheRead)} in · ${fmtTokens(t.output)} out`}
+        />
+      </div>
+
+      {(usage.dailyCost?.length ?? 0) > 0 && (
+        <div className="nerd-chart" style={{ marginTop: 12 }} role="img" aria-label="Daily Anthropic cost">
+          {usage.dailyCost!.map(d => (
+            <div key={d.date} className="nerd-bar" title={`${d.date}: ${fmtMoney(d.cost)}`}>
+              <span style={{ background: '#5ee6a0', height: `${(d.cost / maxCost) * 100}%` }} />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(usage.byModel?.length ?? 0) > 0 && (
+        <div className="nerd-split" style={{ marginTop: 14 }}>
+          {usage.byModel!.map(m => (
+            <div key={m.model} className="nerd-split-row">
+              <div className="nerd-split-head">
+                <span className="nerd-split-model">{m.model}</span>
+                <span className="nerd-split-tokens">
+                  {fmtTokens(m.input)} in · {fmtTokens(m.output)} out
+                </span>
+              </div>
+              <div className="nerd-meter">
+                <span style={{ width: `${((m.input + m.output) / maxModel) * 100}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="nerd-card-sub" style={{ marginTop: 12 }}>
+        {usage.scopedToKey
+          ? 'Token counts are scoped to this app’s API key. '
+          : 'Token counts cover the whole organization — set ANTHROPIC_ADMIN_API_KEY_ID to narrow them to this app. '}
+        Cost is always org-wide (Anthropic’s cost report has no per-key filter) and lags live
+        traffic by a few minutes.
+      </p>
+    </Section>
+  )
+}
+
 export default function AdminDashboard() {
   useDarkBody()
   const [days, setDays] = useState(30)
   const [stats, setStats] = useState<Stats | null>(null)
+  const [usage, setUsage] = useState<Usage | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   // One piece of state, not two — localStorage can't be read during render without
@@ -288,8 +409,23 @@ export default function AdminDashboard() {
     }
   }, [setAdminKey])
 
+  // Fetched separately so a slow or unconfigured Anthropic lookup never delays
+  // the analytics the dashboard is actually for.
+  const loadUsage = useCallback(async (d: number, key: string) => {
+    setUsage(null)
+    try {
+      const res = await fetch(`/api/admin/usage?days=${d}`, { headers: { 'x-admin-key': key } })
+      if (!res.ok) return
+      setUsage(await res.json())
+    } catch {
+      // Panel simply doesn't render — not worth an error state on the page.
+    }
+  }, [])
+
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount/dep-change pattern
   useEffect(() => { if (adminKey) load(days, adminKey) }, [days, load, adminKey])
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- as above
+  useEffect(() => { if (adminKey) loadUsage(days, adminKey) }, [days, loadUsage, adminKey])
 
   if (!auth.checked) return <div style={{ minHeight: '100vh', background: '#0a0e1a' }} />
   if (!adminKey) return <PasswordGate onUnlock={setAdminKey} />
@@ -298,61 +434,36 @@ export default function AdminDashboard() {
   const maxDailyVisits = stats ? Math.max(1, ...stats.visits.dailyVisits.map(d => d.count)) : 1
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0a0e1a', color: '#eaf0ff', fontFamily: 'var(--font-geist-sans), system-ui, sans-serif', padding: '32px 24px 80px' }}>
-      <div style={{ maxWidth: 980, margin: '0 auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 12 }}>
-          <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>TCA Hub — Query Analytics</h1>
-          <div style={{ display: 'flex', gap: 6 }}>
+    <div className="nerd">
+      <div className="nerd-shell">
+        <header className="nerd-header">
+          <div>
+            <h1 className="nerd-title">TCA Hub — Query Analytics</h1>
+            {stats && <p className="nerd-sub">{stats.total} queries · {stats.visits.total} visits · last {stats.days} days</p>}
+          </div>
+          <div className="nerd-ranges" role="group" aria-label="Time range">
             {RANGES.map(r => (
-              <button key={r} onClick={() => setDays(r)} style={{
-                padding: '6px 12px', borderRadius: 100, fontSize: 12, cursor: 'pointer',
-                border: '1px solid rgba(255,255,255,0.15)',
-                background: days === r ? '#b91c3a' : 'transparent',
-                color: days === r ? '#fff' : 'rgba(255,255,255,0.6)',
-              }}>{r}d</button>
+              <button
+                key={r}
+                className="nerd-pill"
+                aria-pressed={days === r}
+                onClick={() => setDays(r)}
+              >{r}d</button>
             ))}
           </div>
-        </div>
+        </header>
 
-        {loading && <p style={{ color: 'rgba(255,255,255,0.4)', marginTop: 24 }}>Loading…</p>}
+        {loading && <p className="nerd-empty">Loading…</p>}
         {error && (
-          <div style={{
-            marginTop: 24, background: 'rgba(255,107,107,0.08)', border: '1px solid rgba(255,107,107,0.3)',
-            borderRadius: 12, padding: '14px 18px', display: 'flex', justifyContent: 'space-between',
-            alignItems: 'center', gap: 12, flexWrap: 'wrap',
-          }}>
-            <p style={{ color: '#ff6b6b', margin: 0, fontSize: 13 }}>{error}</p>
+          <div className="nerd-note" data-tone="bad" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span>{error}</span>
             <CopyPromptButton prompt={dashboardErrorPrompt(error, days)} label="Copy fix prompt" />
           </div>
         )}
 
         {stats && !loading && (
           <>
-            <Section title="Site visits">
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                <Card label="Total visits" value={String(stats.visits.total)} sub={`last ${stats.days} days`} />
-                <Card label="Unique visitors" value={String(stats.visits.uniqueVisitors)} sub="by browser, best-effort" />
-                <Card
-                  label="Asked something"
-                  value={stats.total <= stats.visits.total && stats.visits.queryRate != null ? `${Math.min(100, stats.visits.queryRate * 100).toFixed(0)}%` : '—'}
-                  sub={
-                    stats.total > stats.visits.total
-                      ? 'visit tracking just started — not comparable yet'
-                      : `${stats.total} queries from ${stats.visits.total} visits`
-                  }
-                />
-              </div>
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 70, background: '#12182a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: '10px 12px', marginTop: 12 }}>
-                {stats.visits.dailyVisits.length === 0 && <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 12 }}>No visit data yet</span>}
-                {stats.visits.dailyVisits.map(d => (
-                  <div key={d.date} title={`${d.date}: ${d.count} visits`} style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%', minWidth: 2 }}>
-                    <div style={{ background: '#2a4080', height: `${(d.count / maxDailyVisits) * 100}%`, borderRadius: '2px 2px 0 0' }} />
-                  </div>
-                ))}
-              </div>
-            </Section>
-
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 24 }}>
+            <div className="nerd-grid">
               <Card label="Total queries" value={String(stats.total)} sub={`last ${stats.days} days`} />
               <Card
                 label="No context found"
@@ -360,34 +471,57 @@ export default function AdminDashboard() {
                 sub={`${stats.noResultCount} of ${stats.total}`}
                 tone={stats.noResultRate > 0.1 ? 'bad' : undefined}
               />
-              <Card label="Thin context (<0.6 sim)" value={String(stats.thinResultCount)} sub="found something, weak match" />
-              <Card label="Avg latency" value={stats.avgLatency != null ? `${(stats.avgLatency / 1000).toFixed(1)}s` : '—'} sub={stats.p95Latency != null ? `p95 ${(stats.p95Latency / 1000).toFixed(1)}s` : undefined} />
+              <Card label="Thin context" value={String(stats.thinResultCount)} sub="found something, weak match" />
               <Card
-                label="API cost"
+                label="Avg latency"
+                value={stats.avgLatency != null ? `${(stats.avgLatency / 1000).toFixed(1)}s` : '—'}
+                sub={stats.p95Latency != null ? `p95 ${(stats.p95Latency / 1000).toFixed(1)}s` : undefined}
+              />
+              <Card
+                label="Est. API cost"
                 value={fmtMoney(stats.cost.totalCost)}
                 sub={
                   stats.cost.pricedQueries < stats.total
-                    ? `${stats.cost.pricedQueries} of ${stats.total} queries priced — rest predate cost logging`
+                    ? `${stats.cost.pricedQueries} of ${stats.total} priced`
                     : `${stats.cost.sonnetQueries} of ${stats.total} on Sonnet`
                 }
               />
+              <Card label="Unique visitors" value={String(stats.visits.uniqueVisitors)} sub="by browser, best-effort" />
             </div>
 
             <Section title="Daily volume">
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 90, background: '#12182a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: '10px 12px' }}>
-                {stats.dailyVolume.length === 0 && <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 12 }}>No data yet</span>}
+              <div className="nerd-chart" role="img" aria-label="Daily query volume">
+                {stats.dailyVolume.length === 0 && <span className="nerd-empty">No data yet</span>}
                 {stats.dailyVolume.map(d => (
-                  <div key={d.date} title={`${d.date}: ${d.total} queries, ${d.noResults} no-result`} style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%', minWidth: 2 }}>
-                    <div style={{ background: '#b91c3a', height: `${(d.noResults / maxDaily) * 100}%`, borderRadius: '2px 2px 0 0' }} />
-                    <div style={{ background: '#2a4080', height: `${((d.total - d.noResults) / maxDaily) * 100}%` }} />
+                  <div key={d.date} className="nerd-bar" title={`${d.date}: ${d.total} queries, ${d.noResults} no-result`}>
+                    <span style={{ background: '#b91c3a', height: `${(d.noResults / maxDaily) * 100}%` }} />
+                    <span style={{ background: '#2a4080', height: `${((d.total - d.noResults) / maxDaily) * 100}%` }} />
                   </div>
                 ))}
               </div>
-              <div style={{ display: 'flex', gap: 16, marginTop: 8, fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>
-                <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#2a4080', borderRadius: 2, marginRight: 5 }} />answered</span>
-                <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#b91c3a', borderRadius: 2, marginRight: 5 }} />no context found</span>
+              <div className="nerd-legend">
+                <span><i className="nerd-swatch" style={{ background: '#2a4080' }} />answered</span>
+                <span><i className="nerd-swatch" style={{ background: '#b91c3a' }} />no context found</span>
               </div>
             </Section>
+
+            <Section title="Site visits">
+              <div className="nerd-chart" role="img" aria-label="Daily visits">
+                {stats.visits.dailyVisits.length === 0 && <span className="nerd-empty">No visit data yet</span>}
+                {stats.visits.dailyVisits.map(d => (
+                  <div key={d.date} className="nerd-bar" title={`${d.date}: ${d.count} visits`}>
+                    <span style={{ background: '#2a4080', height: `${(d.count / maxDailyVisits) * 100}%` }} />
+                  </div>
+                ))}
+              </div>
+              <p className="nerd-card-sub" style={{ marginTop: 8 }}>
+                {stats.total > stats.visits.total
+                  ? 'Visit tracking started after query logging — the rate isn’t comparable yet.'
+                  : `${stats.total} queries from ${stats.visits.total} visits${stats.visits.queryRate != null ? ` · ${Math.min(100, stats.visits.queryRate * 100).toFixed(0)}% asked something` : ''}`}
+              </p>
+            </Section>
+
+            <UsagePanel usage={usage} internalCost={stats.cost.totalCost} />
 
             <Section title="Content gaps — where to re-scrape">
               {stats.resolvedCount > 0 && (
@@ -396,19 +530,21 @@ export default function AdminDashboard() {
                 </p>
               )}
               {stats.contentGaps.length === 0 ? (
-                <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: 13 }}>Nothing outstanding — every failing question has since been answered.</p>
+                <p className="nerd-empty">Nothing outstanding — every failing question has since been answered.</p>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {stats.contentGaps.map(g => (
-                    <div key={g.key} style={{ background: '#12182a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: '14px 18px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
-                        <div style={{ fontSize: 14, fontWeight: 600 }}>{g.label} <span style={{ color: '#ff6b6b', fontWeight: 700 }}>({g.count})</span></div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <code style={{ fontSize: 11, color: '#89b4f7', background: 'rgba(137,180,247,0.1)', padding: '3px 8px', borderRadius: 6 }}>{g.ingestRoute}</code>
+                    <div key={g.key} className="nerd-gap">
+                      <div className="nerd-gap-head">
+                        <div style={{ fontSize: 14, fontWeight: 600 }}>
+                          {g.label} <span style={{ color: '#ff6b6b', fontWeight: 700 }}>({g.count})</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <code className="nerd-code">{g.ingestRoute}</code>
                           <CopyPromptButton prompt={gapPrompt(g.label, g.ingestRoute, g.count, g.samples)} />
                         </div>
                       </div>
-                      <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', marginTop: 8, lineHeight: 1.6 }}>
+                      <div className="nerd-card-sub" style={{ marginTop: 8 }}>
                         {g.samples.map((s, i) => <span key={i}>{i > 0 && ' · '}&ldquo;{s}&rdquo;</span>)}
                       </div>
                     </div>
@@ -421,7 +557,7 @@ export default function AdminDashboard() {
               <Table
                 rows={stats.topQueries}
                 cols={[
-                  { key: 'query', label: 'Query', render: r => r.query },
+                  { key: 'query', label: 'Query', primary: true, render: r => r.query },
                   { key: 'count', label: 'Count', render: r => String(r.count) },
                   { key: 'noResultCount', label: 'No-context hits', render: r => r.noResultCount > 0 ? <span style={{ color: '#ff6b6b' }}>{r.noResultCount}</span> : '0' },
                 ]}
@@ -432,7 +568,7 @@ export default function AdminDashboard() {
               <Table
                 rows={stats.noContextHitQueries}
                 cols={[
-                  { key: 'query', label: 'Query', render: r => r.query },
+                  { key: 'query', label: 'Query', primary: true, render: r => r.query },
                   { key: 'noResultCount', label: 'No-context hits', render: r => <span style={{ color: '#ff6b6b', fontWeight: 600 }}>{r.noResultCount}</span> },
                   { key: 'count', label: 'Times asked', render: r => String(r.count) },
                   { key: 'fix', label: 'Fix', render: r => <CopyPromptButton prompt={emptyResultPrompt(r.query)} label="Copy prompt" /> },
@@ -445,7 +581,7 @@ export default function AdminDashboard() {
               <Table
                 rows={stats.noResultQueries}
                 cols={[
-                  { key: 'query', label: 'Query', render: r => r.query },
+                  { key: 'query', label: 'Query', primary: true, render: r => r.query },
                   { key: 'created_at', label: 'When', render: r => new Date(r.created_at).toLocaleString() },
                   { key: 'fix', label: 'Fix', render: r => <CopyPromptButton prompt={emptyResultPrompt(r.query, r.created_at)} label="Copy prompt" /> },
                 ]}
@@ -457,9 +593,9 @@ export default function AdminDashboard() {
               <Table
                 rows={stats.thinQueries}
                 cols={[
-                  { key: 'query', label: 'Query', render: r => r.query },
+                  { key: 'query', label: 'Query', primary: true, render: r => r.query },
                   { key: 'similarity', label: 'Best match', render: r => r.similarity != null ? r.similarity.toFixed(2) : '—' },
-                  { key: 'answer', label: 'Answer preview', render: r => <span style={{ color: 'rgba(255,255,255,0.5)' }}>{(r.answer ?? '').slice(0, 120)}</span> },
+                  { key: 'answer', label: 'Answer preview', render: r => <span style={{ color: '#98a2b4' }}>{(r.answer ?? '').slice(0, 120)}</span> },
                   { key: 'fix', label: 'Fix', render: r => <CopyPromptButton prompt={thinResultPrompt(r.query, r.similarity, r.answer)} label="Copy prompt" /> },
                 ]}
                 empty="None — every answered query had a strong match."
@@ -472,25 +608,32 @@ export default function AdminDashboard() {
   )
 }
 
-function Table<T>({ rows, cols, empty }: { rows: T[]; cols: { key: string; label: string; render: (r: T) => React.ReactNode }[]; empty?: string }) {
-  if (rows.length === 0) {
-    return <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: 13 }}>{empty ?? 'No data.'}</p>
-  }
+interface Col<T> {
+  key: string
+  label: string
+  /** Rendered as the row's heading on mobile rather than a labelled field. */
+  primary?: boolean
+  render: (r: T) => React.ReactNode
+}
+
+function Table<T>({ rows, cols, empty }: { rows: T[]; cols: Col<T>[]; empty?: string }) {
+  if (rows.length === 0) return <p className="nerd-empty">{empty ?? 'No data.'}</p>
+
   return (
-    <div style={{ background: '#12182a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, overflow: 'hidden' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+    <div className="nerd-tablewrap">
+      <table className="nerd-table">
         <thead>
-          <tr>
-            {cols.map(c => (
-              <th key={c.key} style={{ textAlign: 'left', padding: '8px 14px', color: 'rgba(255,255,255,0.4)', fontWeight: 500, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>{c.label}</th>
-            ))}
-          </tr>
+          <tr>{cols.map(c => <th key={c.key} scope="col">{c.label}</th>)}</tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={i} style={{ borderBottom: i < rows.length - 1 ? '1px solid rgba(255,255,255,0.04)' : undefined }}>
+            <tr key={i}>
               {cols.map(c => (
-                <td key={c.key} style={{ padding: '8px 14px', verticalAlign: 'top' }}>{c.render(r)}</td>
+                // data-label is what the mobile layout prints in place of the
+                // hidden column header — see the max-width:760px block in globals.css.
+                <td key={c.key} data-label={c.label} data-primary={c.primary || undefined}>
+                  {c.render(r)}
+                </td>
               ))}
             </tr>
           ))}
