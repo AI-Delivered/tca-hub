@@ -214,14 +214,37 @@ function useDialog(onClose: () => void) {
   return ref
 }
 
+/* Subscribe feeds, by the division TCA actually publishes.
+ *
+ * These were mapped per campus, against calendar IDs the school has since
+ * retired, and the result was worse than stale. Checked against the live feeds:
+ *
+ *   High School     -> id 12, which is "Cottage School Program". A high school
+ *                      parent subscribing got another division's calendar.
+ *   Central Elem.   -> id 2, whose last event is 2026-05-21 — the end of the
+ *                      previous school year. Zero upcoming. The link resolved
+ *                      and the feed parsed, so nothing looked broken; it just
+ *                      never showed a date again.
+ *   East / North    -> included dead per-campus ids 3 and 5 alongside the live
+ *                      Elementary feed, which worked by accident.
+ *
+ * The site now publishes by division — 9 Elementary, 10 Secondary, 11 College
+ * Pathways, 12 Cottage School — with 8 "All TCA" carrying the closures and
+ * breaks that apply to everyone. Each row below folds 8 in, so one subscription
+ * is complete rather than needing two. The three elementary campuses genuinely
+ * share one calendar, so they are one row that names all three rather than
+ * three rows implying a difference that does not exist.
+ *
+ * Verified: every feed carries its own first day of school — 2026-08-19 for
+ * elementary and secondary, 2026-08-18 for College Pathways.
+ */
+const CAL_BASE = 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids='
 const CALENDARS = [
   { label: 'TCA Athletics', desc: 'Games, meets, and tournaments — all sports', ical: 'https://gobound.com/co/schools/theclassahs/calendar/ical/f4c41b333289444' },
-  { label: 'East Elementary', desc: 'Events, holidays, and early outs for East', ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,8,3' },
-  { label: 'Central Elementary', desc: 'Events, holidays, and early outs for Central', ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=2' },
-  { label: 'North Elementary', desc: 'Events, holidays, and early outs for North', ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,5' },
-  { label: 'Junior High', desc: 'JH events, schedules, and campus dates', ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=10' },
-  { label: 'High School', desc: 'HS events, schedules, and campus dates', ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=12' },
-  { label: 'College Pathways', desc: 'CP events and campus dates', ical: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=11,4' },
+  { label: 'Elementary', desc: 'East, Central & North — plus TCA-wide closures', ical: `${CAL_BASE}9,8` },
+  { label: 'Junior High & High School', desc: 'Secondary events, plus TCA-wide closures', ical: `${CAL_BASE}10,8` },
+  { label: 'College Pathways', desc: 'CP dates, plus TCA-wide closures', ical: `${CAL_BASE}11,8` },
+  { label: 'Cottage School', desc: 'CSP dates, plus TCA-wide closures', ical: `${CAL_BASE}12,8` },
 ]
 
 function CalendarPanel({ onClose }: { onClose: () => void }) {
