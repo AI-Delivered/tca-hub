@@ -12,42 +12,69 @@ const FEEDS = [
     label: 'TCA Athletics',
     deletePattern: '%gobound%ical%',
   },
-  // Per-campus Finalsite calendar feeds — IDs discovered from data-calendar-ids attributes
+  /* Finalsite calendar feeds, by the division TCA actually publishes.
+   *
+   * These were per-campus IDs read off data-calendar-ids attributes, and the
+   * school has since retired those calendars. Checked against the live feeds:
+   *
+   *   High School     -> id 12, which is "Cottage School Program". Twelve
+   *                      chunks of another division's dates were sitting in the
+   *                      corpus titled "High School Calendar", and the app
+   *                      answered high school calendar questions from them.
+   *   Central Elem.   -> id 2, whose last event is 2026-05-21. 197 events, none
+   *                      upcoming, so the route inserted zero chunks and
+   *                      Central Elementary had no calendar in the corpus at
+   *                      all. It reported "0 chunks" every six hours and that
+   *                      read as nothing to do.
+   *
+   * Live IDs: 9 Elementary, 10 Secondary, 11 College Pathways, 12 Cottage
+   * School, 8 "All TCA" for the closures everyone shares. Campus rows are kept
+   * because the label becomes the chunk title and a parent asks by campus, but
+   * each now points at its real division. The elementary three genuinely share
+   * one calendar, so they hold the same events — worth collapsing, but that is
+   * a separate change from making them correct.
+   */
   {
-    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,8,3',
+    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,8',
     source: 'https://www.tcatitans.org/schools/east-elementary/east-elementary-calendar',
     label: 'East Elementary Calendar',
     deletePattern: '%east-elementary-calendar%',
   },
   {
-    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=2',
+    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,8',
     source: 'https://www.tcatitans.org/schools/central-elementary/central-elementary-calendar',
     label: 'Central Elementary Calendar',
     deletePattern: '%central-elementary-calendar%',
   },
   {
-    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,5',
+    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=9,8',
     source: 'https://www.tcatitans.org/schools/north-elementary/north-elementary-calendar',
     label: 'North Elementary Calendar',
     deletePattern: '%north-elementary-calendar%',
   },
   {
-    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=11,4',
+    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=11,8',
     source: 'https://www.tcatitans.org/schools/college-pathways/college-pathways-calendar',
     label: 'College Pathways Calendar',
     deletePattern: '%college-pathways-calendar%',
   },
   {
-    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=10',
+    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=10,8',
     source: 'https://www.tcatitans.org/schools/junior-high/junior-high-calendar',
     label: 'Junior High Calendar',
     deletePattern: '%junior-high-calendar%',
   },
   {
-    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=12',
+    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=10,8',
     source: 'https://www.tcatitans.org/schools/high-school/high-school-calendar',
     label: 'High School Calendar',
     deletePattern: '%high-school-calendar%',
+  },
+  {
+    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=12,8',
+    source: 'https://www.tcatitans.org/schools/cottage-school/cottage-school-calendar',
+    label: 'Cottage School Calendar',
+    deletePattern: '%cottage-school-calendar%',
   },
 
   // TeamReach — the coaches' own feeds, and the only source for practice times.
