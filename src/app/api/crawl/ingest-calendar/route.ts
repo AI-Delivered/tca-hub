@@ -132,6 +132,8 @@ export async function GET(req: NextRequest) {
   await supabase.from('page_chunks').delete().ilike('url', `${CHUNK_URL}%`)
 
   let chunksInserted = 0
+  let storeErrors = 0
+  const failedSports: string[] = []
 
   // Full upcoming schedule chunk
   const fullLines = [`TCA Athletics & Activities — Upcoming Schedule (as of ${today}):`]
@@ -189,8 +191,24 @@ export async function GET(req: NextRequest) {
         now
       )
       chunksInserted += stored.inserted
-    } catch { /* continue */ }
+      storeErrors += stored.errors
+    } catch (e) {
+      /* This was `catch { /* continue *\/ }` — no counter, no log, and no
+       * `errors` field on the response. A sport whose schedule failed to store
+       * looked exactly like a sport with no events on the calendar, and the
+       * route reported chunksInserted and moved on. If every sport had failed
+       * it would have returned zero and read as an empty week.
+       */
+      failedSports.push(sport)
+      console.error(`ingest-calendar: storing ${sport} failed:`, e instanceof Error ? e.message : e)
+    }
   }
 
-  return NextResponse.json({ chunksInserted, events: events.length, sports: groups.size })
+  return NextResponse.json({
+    chunksInserted,
+    events: events.length,
+    sports: groups.size,
+    storeErrors,
+    failedSports,
+  })
 }

@@ -92,8 +92,9 @@ export async function GET(req: NextRequest) {
         })
         if (error) errors++; else indexed++
       }
-    } catch {
+    } catch (e) {
       errors++
+      console.error(`ingest-deep: ${page.url} failed:`, e instanceof Error ? e.message : e)
     }
   }
 

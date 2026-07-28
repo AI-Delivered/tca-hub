@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
+import { pageBody } from '@/lib/page-body'
 
 export const maxDuration = 300
 
@@ -41,8 +42,15 @@ const VISUAL_PAGES = [
   { url: 'https://www.tcatitans.org/fs/resource-manager/view/d50acc49-99ee-4cfa-9658-1a2da93b8796', title: 'TCA School Calendar 2026-27 (Secondary)', isPdf: true },
 ]
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function extractPage(page: { url: string; title: string; isPdf?: boolean }, anthropic: any): Promise<string> {
+// Matches the crawler's floor, so the two routes agree on what an empty page is.
+const CONTENT_FLOOR = 150
+
+type AnthropicClient = InstanceType<typeof import('@anthropic-ai/sdk').default>
+
+async function extractPage(
+  page: { url: string; title: string; isPdf?: boolean },
+  anthropic: AnthropicClient
+): Promise<string> {
   const res = await fetch(page.url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; TCAHub/1.0)' },
     signal: AbortSignal.timeout(15000),
@@ -52,9 +60,16 @@ async function extractPage(page: { url: string; title: string; isPdf?: boolean }
   if (page.isPdf) {
     const buffer = await res.arrayBuffer()
     const base64 = Buffer.from(buffer).toString('base64')
+    /* 3,000 was enough for today's three calendars — measured, they extract in
+     * about 1,200 output tokens and stop on end_turn — but there was no check
+     * that it had been enough, and that is the part that matters. ingest-pdfs
+     * had the same shape and it did bite there: a 30-page handbook came back as
+     * its table of contents and looked exactly like a short document. If one of
+     * these documents grows, this now says so instead of storing half of it.
+     */
     const msg = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 3000,
+      max_tokens: 16_000,
       messages: [{
         role: 'user',
         content: [
@@ -63,12 +78,16 @@ async function extractPage(page: { url: string; title: string; isPdf?: boolean }
         ],
       }],
     })
+    if (msg.stop_reason === 'max_tokens') {
+      throw new Error(`extraction hit the token ceiling — "${page.title}" is incomplete, not storing`)
+    }
     return msg.content[0].type === 'text' ? msg.content[0].text ?? '' : ''
   }
 
-  // HTML page — try text extraction first
+  // HTML page — try text extraction first. Chrome off before measuring it, or
+  // every page clears any floor on site furniture alone. See lib/page-body.
   const html = await res.text()
-  const text = htmlToText(html)
+  const text = pageBody(htmlToText(html))
 
   // If content is thin (mostly nav/boilerplate), use vision on any images found
   if (text.replace(/\s/g, '').length < 400) {
@@ -110,8 +129,11 @@ export async function POST(req: NextRequest) {
   const { VoyageAIClient } = await import('voyageai')
   const { default: Anthropic } = await import('@anthropic-ai/sdk')
   const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) as any
+  /* Typed, not `as any`. The cast un-typed every call on this client, which is
+   * how this route kept a 3,000-token ceiling and no stop_reason check while
+   * ingest-pdfs grew both — nothing could tell them apart.
+   */
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   const supabase = getSupabaseAdmin()
   const now = new Date().toISOString()
 
@@ -121,8 +143,23 @@ export async function POST(req: NextRequest) {
   for (const page of VISUAL_PAGES) {
     try {
       const content = await extractPage(page, anthropic)
-      if (!content || content.trim().length < 50) {
-        errors.push(`${page.title}: no content`)
+
+      /* A page with nothing of its own is not stored, and anything previously
+       * stored for it is removed.
+       *
+       * The two bell-schedule entries here are HTML shells wrapped around a
+       * linked PDF — 322 and 330 characters, all of it navigation. This route
+       * stored them under the titles "TCA High School Bell Schedule" and "TCA
+       * Junior High Bell Schedule", which are close to word-for-word the
+       * question a parent asks, and the High School one was the top vector hit
+       * for "what time does the high school day end" while containing no times.
+       * The crawler had already been taught not to do this; this route had not,
+       * and wrote them straight back under a better title than the crawler ever
+       * gave them.
+       */
+      if (!content || content.trim().length < CONTENT_FLOOR) {
+        await supabase.from('page_chunks').delete().eq('url', page.url)
+        errors.push(`${page.title}: no content of its own (${content.trim().length} chars)`)
         continue
       }
 

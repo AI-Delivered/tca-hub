@@ -638,8 +638,11 @@ export async function POST(req: NextRequest) {
           indexedCount++
         }
       }
-    } catch {
+    } catch (e) {
+      // Counted but never explained: a document could fail to fetch, extract or
+      // embed and the run reported a number with nothing behind it.
       errors++
+      console.error(`ingest-pdfs: ${doc.title || doc.url} failed:`, e instanceof Error ? e.message : e)
     }
   }
 
