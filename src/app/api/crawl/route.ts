@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { fetchAllUrls } from '@/lib/page-urls'
 import { pageBody } from '@/lib/page-body'
+import { qualifiedTitle } from '@/lib/page-title'
 
 export const maxDuration = 300
 
@@ -122,7 +123,21 @@ function extractLinks(html: string): string[] {
   return links
 }
 
-function chunkText(text: string, size = 1800, overlap = 200): string[] {
+/* 1,800 characters was splitting a third of the site's pages, and where it
+ * split mattered.
+ *
+ * The high school bell schedule on the campus homepage runs FIRST through
+ * SEVENTH in one block. At 1,800 the chunk ended at "SIXTH: 1:" — so the chunk
+ * that matches "high school bell schedule" did not contain the time the day
+ * ends, and the answer to "what time does the high school day end" came out as
+ * 3:10 (College Pathways' last period) in half of four runs.
+ *
+ * Measured over 486 crawled pages: p50 is 1,316 characters and p75 is 2,065,
+ * so 1,800 cut 30% of pages while 3,200 cuts 15%. Most pages on this site are
+ * one topic — a bell schedule, a supply list, a staff list — and are worth
+ * keeping whole.
+ */
+function chunkText(text: string, size = 3200, overlap = 300): string[] {
   const chunks: string[] = []
   let start = 0
   while (start < text.length) {
@@ -142,7 +157,9 @@ async function crawlOne(url: string): Promise<{ text: string; title: string; lin
     const html = await res.text()
     return {
       text: htmlToText(html),
-      title: extractTitle(html),
+      // Qualified here rather than at insert time so the title stored, the
+      // title embedded and the title shown under an answer are one string.
+      title: qualifiedTitle(extractTitle(html), url),
       links: extractLinks(html),
     }
   } catch {
@@ -201,6 +218,11 @@ export async function GET(req: NextRequest) {
   const MAX_PAGES = 600
   const BATCH = 5
   let indexed = 0, skipped = 0, errors = 0
+  // Pages the site refused or timed out on. These used to vanish without trace:
+  // crawlOne returns null, the page is marked visited, its links are never
+  // followed, and nothing counted it. See the stale sweep below for why that
+  // silence was dangerous rather than merely untidy.
+  let fetchFailures = 0
   let ranOutOfTime = false
 
   while (queue.length > 0 && visited.size < MAX_PAGES) {
@@ -220,6 +242,7 @@ export async function GET(req: NextRequest) {
 
     // Fetch all pages in batch concurrently
     const results = await Promise.all(batch.map(url => crawlOne(url).then(r => ({ url, r }))))
+    for (const { r } of results) if (!r) fetchFailures++
 
     // Collect links for BFS
     for (const { r } of results) {
@@ -248,19 +271,34 @@ export async function GET(req: NextRequest) {
         model: 'voyage-3-lite',
       })
 
+      /* One insert per page, not one per chunk.
+       *
+       * A full pass writes ~980 chunks, and a row at a time meant ~980 round
+       * trips to Postgres on top of ~350 deletes. That is what pushed the run
+       * past its 240s budget and left 67 pages uncrawled — the route reported
+       * it honestly and skipped the stale sweep, which is the safe behaviour,
+       * but the work still wasn't getting done.
+       */
       let chunkIdx = 0
       for (const { url, r } of toEmbed) {
         const chunks = chunkText(r!.text)
-        // Replace this page's rows, now that nothing was cleared up front.
-        await supabase.from('page_chunks').delete().eq('url', url)
-        for (let i = 0; i < chunks.length; i++) {
+        const rows: { url: string; title: string; content: string; embedding: number[]; crawled_at: string }[] = []
+        for (const content of chunks) {
           const embedding = embRes.data?.[chunkIdx]?.embedding
           chunkIdx++
           if (!embedding) continue
-          const { error } = await supabase.from('page_chunks').insert({
-            url, title: r!.title, content: chunks[i], embedding, crawled_at: now,
-          })
-          if (error) errors++; else indexed++
+          rows.push({ url, title: r!.title, content, embedding, crawled_at: now })
+        }
+        if (!rows.length) continue
+
+        // Replace this page's rows, now that nothing was cleared up front.
+        await supabase.from('page_chunks').delete().eq('url', url)
+        const { error } = await supabase.from('page_chunks').insert(rows)
+        if (error) {
+          errors += rows.length
+          if (errors <= rows.length * 3) console.error(`page_chunks insert failed for ${url}: ${error.message}`)
+        } else {
+          indexed += rows.length
         }
       }
     } catch {
@@ -274,7 +312,31 @@ export async function GET(req: NextRequest) {
   // corpus is missing pages the site links to — worth acting on, unlike the old
   // `queueRemaining`, which counted duplicates and was never zero.
   const notReached = queue.filter(u => !visited.has(u)).length
-  const complete = !ranOutOfTime && notReached === 0 && visited.size < MAX_PAGES
+  /* Is this run trustworthy enough to delete things on the strength of?
+   *
+   * "The queue emptied" is not the same as "the crawl succeeded". When the site
+   * rate-limits, failed pages yield no links, so the frontier starves and the
+   * queue empties early — which looked exactly like a clean finish. One such run
+   * visited 308 pages where the previous had visited 453, declared itself
+   * complete, and swept 137 live pages out of the corpus as though they had been
+   * deleted from the site.
+   *
+   * So the sweep now also requires that most pages fetched successfully, and
+   * that this run saw a comparable number of pages to what the corpus already
+   * knows about. A thin run leaves the corpus alone and says why.
+   */
+  const failureRate = visited.size ? fetchFailures / visited.size : 1
+  const knownPages = new Set(
+    (await fetchAllUrls((from, to) =>
+      supabase.from('page_chunks').select('url')
+        .ilike('url', `${BASE}%`)
+        .not('url', 'ilike', '%staff-directory%')
+        .not('url', 'ilike', '%/fs/resource-manager/%')
+        .order('url').range(from, to))).map(u => u.split('#')[0])
+  )
+  const coverage = knownPages.size ? visited.size / knownPages.size : 1
+  const healthy = failureRate <= 0.1 && coverage >= 0.8
+  const complete = !ranOutOfTime && notReached === 0 && visited.size < MAX_PAGES && healthy
 
   /* Pages that have gone from the site.
    *
@@ -286,14 +348,7 @@ export async function GET(req: NextRequest) {
    */
   let staleRemoved = 0
   if (complete) {
-    const known = await fetchAllUrls((from, to) =>
-      supabase.from('page_chunks').select('url')
-        .ilike('url', `${BASE}%`)
-        .not('url', 'ilike', '%staff-directory%')
-        .not('url', 'ilike', '%/fs/resource-manager/%')
-        .order('url').range(from, to))
-
-    for (const url of new Set(known)) {
+    for (const url of knownPages) {
       if (visited.has(url)) continue
       const { error } = await supabase.from('page_chunks').delete().eq('url', url)
       if (!error) staleRemoved++
@@ -305,6 +360,10 @@ export async function GET(req: NextRequest) {
     hitPageLimit: visited.size >= MAX_PAGES,
     pagesNotReached: notReached,
     ranOutOfTime,
+    fetchFailures,
+    // Why a run declined to sweep, when it did.
+    sweptStalePages: complete,
+    pageCoverage: Number(coverage.toFixed(2)),
     indexed,
     skipped,
     errors,
