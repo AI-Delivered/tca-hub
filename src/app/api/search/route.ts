@@ -753,17 +753,86 @@ export async function POST(req: NextRequest) {
   }
   const context = contextParts.join('\n\n---\n\n')
 
-  // Sources (filtered by similarity)
-  const seen = new Set<string>()
-  const sources = merged
-    .filter((c: { url: string; similarity: number }) => {
-      if (c.similarity < 0.50) return false
-      if (seen.has(c.url)) return false
+  /* Which pages to put under the answer.
+   *
+   * This took the four highest-scoring chunks, which sounds right and isn't,
+   * because `similarity` is a constant on any keyword-anchored chunk. Asked
+   * "who is the football coach", the app answers correctly — Justin Rich,
+   * jrich@asd20.org — and then cited "TCA Athletics — Upcoming" and three more
+   * GoBound calendar links, because those carry a stamped 0.90 and win every
+   * slot. The one page that actually had the coach on it, /hs-sports/football,
+   * was not among them. A parent clicking through to check finds a schedule.
+   *
+   * So the citations are chosen after the answer exists, from what the answer
+   * visibly used: emails, names, numbers and other distinctive terms that
+   * appear in both. A chunk that contributed a fact gets credited for it; a
+   * chunk that merely ranked highly does not.
+   */
+  const STOP = new Set([
+    'the', 'and', 'for', 'are', 'with', 'that', 'this', 'from', 'have', 'has', 'his', 'her', 'their',
+    'you', 'your', 'not', 'but', 'all', 'any', 'can', 'will', 'they', 'them', 'been', 'were', 'was',
+    'tca', 'school', 'classical', 'academy', 'titans', 'student', 'students', 'more', 'here', 'each',
+  ])
+
+  /* Distinctive terms in a piece of text, weighted by how much a match means.
+   *
+   * An email or a time in common is near-proof that a chunk is where a fact
+   * came from; a shared ordinary word is barely evidence at all. Unweighted,
+   * "what is the dress code" cited a 6th grade supply list, which genuinely
+   * shares words like shoes and shirt with a uniform policy and contributed
+   * nothing to the answer.
+   */
+  const HARD_TERM_WEIGHT = 6
+
+  function evidenceTerms(text: string): Map<string, number> {
+    const terms = new Map<string, number>()
+    const hard = (t: string) => terms.set(t, HARD_TERM_WEIGHT)
+    for (const m of text.matchAll(/[\w.+-]+@[\w.-]+\.\w+/g)) hard(m[0].toLowerCase())
+    for (const m of text.matchAll(/\b\d{1,2}:\d{2}\s*(?:am|pm)?\b/gi)) hard(m[0].toLowerCase().replace(/\s+/g, ''))
+    for (const m of text.matchAll(/\$\s?\d[\d,]*(?:\.\d{2})?/g)) hard(m[0].replace(/\s/g, ''))
+    for (const m of text.matchAll(/\b[A-Za-z][A-Za-z'-]{3,}\b/g)) {
+      const w = m[0].toLowerCase()
+      if (!STOP.has(w) && !terms.has(w)) terms.set(w, 1)
+    }
+    return terms
+  }
+
+  const dedupeSources = (chunks: Chunk[]) => {
+    const seen = new Set<string>()
+    const out: { url: string; title: string }[] = []
+    for (const c of chunks) {
+      if (seen.has(c.url)) continue
       seen.add(c.url)
-      return true
-    })
-    .slice(0, 4)
-    .map((c: { url: string; title: string }) => ({ url: c.url, title: c.title }))
+      out.push({ url: c.url, title: c.title })
+      if (out.length === 4) break
+    }
+    return out
+  }
+
+  // Used when the answer never arrives (generation failed) and as the floor when
+  // nothing overlaps — a paraphrased answer can legitimately share few terms.
+  const fallbackSources = dedupeSources(merged.filter((c: Chunk) => c.similarity >= 0.50))
+
+  function sourcesFor(answer: string): { url: string; title: string }[] {
+    const answerTerms = evidenceTerms(answer)
+    if (answerTerms.size < 3) return fallbackSources
+
+    let totalWeight = 0
+    for (const w of answerTerms.values()) totalWeight += w
+
+    const scored = merged
+      .map((c: Chunk) => {
+        const chunkTerms = evidenceTerms(c.content)
+        let hit = 0
+        for (const [term, weight] of answerTerms) if (chunkTerms.has(term)) hit += weight
+        // The share of the answer, by weight, that this chunk can account for.
+        return { c, score: hit / totalWeight }
+      })
+      .filter(s => s.score > 0.12)
+      .sort((a, b) => b.score - a.score)
+
+    return scored.length ? dedupeSources(scored.map(s => s.c)) : fallbackSources
+  }
 
   // Inspect what a question would cost and what it would be answered from,
   // without spending a single answer token. Secret-gated; used by
@@ -930,7 +999,11 @@ Answer style:
   // Stream the response
   const readableStream = new ReadableStream({
     async start(controller) {
-      controller.enqueue(send({ type: 'sources', sources }))
+      // Citations are sent once the answer exists — see sourcesFor(). The client
+      // stores them whenever they arrive and the panel renders under the answer,
+      // so this reads as the citations settling after the text, rather than four
+      // links sitting there while the answer is still being written.
+      let sources = fallbackSources
 
       // Cards follow the answer as it's written: the moment the model names
       // someone, their face appears. Re-sent only when the set actually changes.
@@ -1006,6 +1079,9 @@ Answer style:
         }
         if (!fromData) controller.enqueue(send({ type: 'error', message: 'assistant unavailable' }))
       }
+
+      sources = sourcesFor(answerText)
+      controller.enqueue(send({ type: 'sources', sources }))
 
       // Only a real generation is worth caching — never an outage message, and
       // never a follow-up whose meaning depends on the turn before it.
