@@ -221,14 +221,35 @@ export async function POST(req: NextRequest) {
 
   const supabase = getSupabaseAdmin()
 
+  /* The page list this route crawls for document links.
+   *
+   * Two things made this shrink as the route succeeded, which is the worst
+   * possible direction for it to move.
+   *
+   * PostgREST caps a response at 1,000 rows regardless of what `limit` asks
+   * for, so `.limit(2000)` silently returned 1,000 of 1,356 — a ceiling that
+   * looked like it had headroom and did not.
+   *
+   * Worse, documents live under tcatitans.org too, so every PDF this route
+   * ingested added chunks that matched the same filter and consumed rows of
+   * that 1,000 before the JS filter could drop them. Measured mid-backlog:
+   * 475 of 1,000 rows were resource-manager chunks, leaving 93 distinct pages
+   * to scan where there had been 150+. Each successful run therefore found
+   * fewer pages, which found fewer documents — a loop that tightened around
+   * itself the more work it did.
+   *
+   * Excluding documents in SQL spends the whole row budget on pages. The
+   * ordering makes the truncation predictable rather than arbitrary.
+   */
   const { data: pageRows } = await supabase
     .from('page_chunks')
     .select('url')
     .ilike('url', 'https://www.tcatitans.org/%')
-    .limit(2000)
+    .not('url', 'ilike', '%/fs/resource-manager/%')
+    .order('url')
+    .limit(1000)
 
   const pages = [...new Set((pageRows ?? []).map(r => r.url.split('#')[0]))]
-    .filter(u => !u.includes('/fs/resource-manager/'))
     .filter(u => !SKIP_PAGE.some(re => re.test(u)))
     .slice(0, DISCOVERY_PAGE_LIMIT)
 
