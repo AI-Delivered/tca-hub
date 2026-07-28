@@ -881,6 +881,37 @@ Answer style:
     },
   ]
 
+  /* Two different numbers that were being conflated.
+   *
+   * `similarity` on a chunk serves double duty. For vector hits it is a real
+   * cosine score from match_chunks. For keyword-anchored hits it is a constant
+   * this route stamps on to force the chunk up the ordering — 0.90 for the
+   * GoBound athletics anchor, 0.82 for a sport-specific one, 0.72, 0.70, 0.65,
+   * 0.60 elsewhere. As a *ranking* hint that is fine and deliberate.
+   *
+   * The bug was reading the same field back as a *measurement*. topSimilarity is
+   * the max across merged chunks, so any query that tripped the athletics anchor
+   * reported 0.90 regardless of how well anything actually matched, while a
+   * query that missed the anchors reported its true ~0.55. The dashboard's
+   * "thin" count and the Sonnet routing decision both keyed off that, so the
+   * same number meant different things depending on which path a query took —
+   * which is why logged medians (0.65-0.72) and directly measured cosines
+   * (0.547-0.608) disagreed.
+   *
+   * `vectorTopSimilarity` is the honest one: the best real cosine, taken before
+   * the keyword chunks are merged in. That is what gets logged.
+   */
+  const vectorTopSimilarity = (chunks ?? []).reduce(
+    (max: number, c: Chunk) => Math.max(max, c.similarity),
+    0
+  )
+
+  // Routing deliberately still uses the merged value, including the synthetic
+  // anchors. Those constants encode "a keyword anchor fired, so we have a
+  // confidently relevant chunk" — which is genuinely a reason not to escalate.
+  // Switching this to the vector score would silently move a chunk of traffic
+  // onto Sonnet at 3x cost, so it waits until the newly-honest logged numbers
+  // show where the line actually belongs.
   const topSimilarity = merged.reduce((max: number, c: Chunk) => Math.max(max, c.similarity), 0)
 
   // Escalate to Sonnet only on the harder cases — weak retrieval match (model has to
@@ -996,7 +1027,7 @@ Answer style:
         query: loggedQuery,
         had_results: true,
         source_count: merged.length,
-        top_similarity: topSimilarity,
+        top_similarity: vectorTopSimilarity,
         model: failure ? `${MODEL}-failed` : MODEL,
         latency_ms: Date.now() - requestStart,
         answer: answerText,
