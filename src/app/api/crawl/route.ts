@@ -37,7 +37,20 @@ const SKIP_PATTERNS = [
   '/explore-tca/tca-titan-of-the-year', '/explore-tca/tca-moments',
   '/sitemap', '/login', '/logout', '/search', 'const_page=',
   'javascript:', '/uploaded/', '/staff-directory', // handled by ingest-staff
-  '/board-of-directors', '/board-minutes', '/governance',
+
+  // Governance and archive. '/board-of-directors' and '/board-minutes' were
+  // here already but never matched anything — the real paths are '/board/…'
+  // ('/board/board-meeting-agendas-meeting-minutes', '/board/board-highlights'),
+  // so 32 chunks of agendas and minutes were being crawled and stored anyway.
+  // These mirror the exclusions ingest-pdfs applies to document discovery; both
+  // lists exist because this app answers current parent questions, not
+  // governance or historical ones.
+  '/board/', '/board-of-directors', '/board-minutes', '/governance',
+  '/explore-tca/tca-history',
+  '/hidden-pages/financial-transparency',
+  // The phone-policy page's link list is a screen-time research bibliography —
+  // real papers, uploaded by the school, useless for "when is practice".
+  '/family/digital-health-in-a-classical-environment',
 ]
 
 const SKIP_EXTS = /\.(jpe?g|png|gif|webp|svg|ico|bmp|zip|doc|xls|ppt|mp4|mp3|mov)(\?.*)?$/i
