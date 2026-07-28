@@ -58,17 +58,30 @@ const FEEDS = [
     label: 'College Pathways Calendar',
     deletePattern: '%college-pathways-calendar%',
   },
+  /* One Secondary entry, not two, and pointed at a page that exists.
+   *
+   * /schools/junior-high/junior-high-calendar and
+   * /schools/high-school/high-school-calendar both return 404 — the school has
+   * no per-campus calendar page for either, and its own secondary homepages
+   * link to /calendar instead. Storing 22 chunks under those URLs did two
+   * things: every citation under a secondary calendar answer was a dead link,
+   * and because the crawler cannot visit a 404 it never saw them, so the stale
+   * sweep deleted them on each healthy crawl and this route recreated them six
+   * hours later, forever.
+   *
+   * Junior High and High School read the same Secondary feed, so they are one
+   * entry whose title names both — a parent asking about either still matches.
+   *
+   * The #secondary fragment keeps these rows distinct from the crawler's own
+   * chunks for /calendar, which would otherwise share a URL and delete each
+   * other. It survives the sweep for the same reason: the crawler compares
+   * fragment-stripped URLs, so it never matches this one.
+   */
   {
     url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=10,8',
-    source: 'https://www.tcatitans.org/schools/junior-high/junior-high-calendar',
-    label: 'Junior High Calendar',
-    deletePattern: '%junior-high-calendar%',
-  },
-  {
-    url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=10,8',
-    source: 'https://www.tcatitans.org/schools/high-school/high-school-calendar',
-    label: 'High School Calendar',
-    deletePattern: '%high-school-calendar%',
+    source: 'https://www.tcatitans.org/calendar#secondary',
+    label: 'Junior High & High School Calendar',
+    deletePattern: '%tcatitans.org/calendar#secondary%',
   },
   {
     url: 'https://www.tcatitans.org/fs/calendar-manager/events.ics?calendar_ids=12,8',
