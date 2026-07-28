@@ -246,6 +246,7 @@ export async function GET(req: NextRequest) {
   // of its own, and pages skipped as a duplicate of one already stored.
   let emptied = 0
   let duplicates = 0
+  let unchangedPages = 0
   /* Finalsite serves every page at two URLs — a friendly path and /fs/pages/<id>
    * — and the crawler had no idea they were the same page. Half the bell
    * schedule rows in the corpus were one page stored twice, which is wasted
@@ -271,6 +272,43 @@ export async function GET(req: NextRequest) {
         .not('url', 'ilike', '%/fs/resource-manager/%')
         .order('url').range(from, to))).map(u => u.split('#')[0])
   )
+
+  /* What each page looked like last time, so an unchanged page costs nothing
+   * beyond the fetch.
+   *
+   * A crawl is fetch-bound — measured, 291ms per page at this concurrency, so
+   * 453 pages is 132s of the 240s budget and there is no way around it short of
+   * asking the site for fewer pages. What is avoidable is everything after the
+   * fetch: a school site barely changes between runs, and this route was
+   * re-embedding and rewriting all ~500 chunks every time regardless.
+   *
+   * Read once here rather than per page — one paged query against a few
+   * hundred rows, versus a round trip per URL that would cost more than the
+   * embeds it saves. Compared on chunk count plus the first and last chunk,
+   * which is exact for the 85% of pages that are a single chunk and specific
+   * enough for the rest; a real edit moves at least one of the three.
+   */
+  const previous = new Map<string, { count: number; first: string; last: string }>()
+  for (let from = 0; ; from += 1000) {
+    const { data } = await supabase.from('page_chunks').select('url, content')
+      .ilike('url', `${BASE}%`)
+      .not('url', 'ilike', '%staff-directory%')
+      .not('url', 'ilike', '%/fs/resource-manager/%')
+      .order('url').order('id').range(from, from + 999)
+    const rows = (data ?? []) as { url: string; content: string }[]
+    for (const row of rows) {
+      const seen = previous.get(row.url)
+      if (!seen) previous.set(row.url, { count: 1, first: row.content, last: row.content })
+      else { seen.count++; seen.last = row.content }
+    }
+    if (rows.length < 1000) break
+  }
+
+  const unchangedSince = (url: string, chunks: string[]) => {
+    const seen = previous.get(url)
+    return !!seen && seen.count === chunks.length &&
+      seen.first === chunks[0] && seen.last === chunks[chunks.length - 1]
+  }
 
   while (queue.length > 0 && visited.size < MAX_PAGES) {
     // Checked before a batch, not during: a batch that starts under the line
@@ -327,10 +365,14 @@ export async function GET(req: NextRequest) {
       const { error } = await supabase.from('page_chunks').delete().eq('url', url)
       if (!error) { emptied++; knownPages.delete(url) }
     }
-    if (!toEmbed.length) { skipped += batch.length; continue }
+    // Pages whose text is byte-for-byte what is already stored. Still visited,
+    // so the stale sweep leaves them alone; just not re-embedded.
+    const changed = toEmbed.filter(({ url, r }) => !unchangedSince(url, chunkText(r!.text)))
+    unchangedPages += toEmbed.length - changed.length
+    if (!changed.length) { skipped += batch.length - toEmbed.length; continue }
 
     try {
-      const allChunks = toEmbed.flatMap(({ r }) => chunkText(r!.text))
+      const allChunks = changed.flatMap(({ r }) => chunkText(r!.text))
       const embRes = await voyage.embed({
         input: allChunks.map(c => c.slice(0, 16000)),
         model: 'voyage-3-lite',
@@ -345,7 +387,7 @@ export async function GET(req: NextRequest) {
        * but the work still wasn't getting done.
        */
       let chunkIdx = 0
-      for (const { url, r } of toEmbed) {
+      for (const { url, r } of changed) {
         const chunks = chunkText(r!.text)
         const rows: { url: string; title: string; content: string; embedding: number[]; crawled_at: string }[] = []
         for (const content of chunks) {
@@ -378,8 +420,13 @@ export async function GET(req: NextRequest) {
           indexed += rows.length
         }
       }
-    } catch {
+    } catch (e) {
+      // Bare `catch { errors += batch.length }` here meant a whole batch could
+      // fail — an embed rejected, a malformed chunk — and the run reported a
+      // number with no way to find out what it was. Ten errors appeared after
+      // an unrelated change and there was nothing to read.
       errors += batch.length
+      console.error(`crawl batch failed (${batch.length} pages, first ${batch[0]}):`, e instanceof Error ? e.message : e)
     }
 
     skipped += batch.length - toEmbed.length
@@ -431,6 +478,7 @@ export async function GET(req: NextRequest) {
     ranOutOfTime,
     fetchFailures,
     emptiedPages: emptied,
+    unchangedPages,
     duplicatePages: duplicates,
     // Why a run declined to sweep, when it did.
     sweptStalePages: complete,
