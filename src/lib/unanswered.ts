@@ -35,6 +35,31 @@ export const UNANSWERED_ILIKE = [
   '%is not in the%',
   '%not listed%',
   '%no information%',
+
+  /* The second half of this list came from checking the first half against the
+   * answers actually being written, rather than from imagining how a model
+   * declines. It turns out it declines in more than one voice.
+   *
+   * "The 2026-27 playoff dates haven't been posted", "the High School track
+   * schedule hasn't been posted yet", "practice dates aren't listed in the
+   * upcoming schedule" — all plainly saying the information is not there, none
+   * of them matched. Measured over 454 answered rows, the original twelve
+   * patterns caught 38 and missed 22 more, so roughly a third of the app's real
+   * gaps were invisible on the dashboard that exists to show them.
+   *
+   * Note "aren't listed" against "not listed": ILIKE's % stands in for the
+   * apostrophe but not for a different word, so the negation twins have to be
+   * written out. The uncontracted forms are here for symmetry — they had no
+   * hits yet and cost nothing.
+   */
+  '%aren%t listed%',
+  '%isn%t listed%',
+  '%haven%t been posted%',
+  '%hasn%t been posted%',
+  '%have not been posted%',
+  '%has not been posted%',
+  '%doesn%t include%',
+  '%does not include%',
 ] as const
 
 // `%` stands in for the apostrophe as well as for arbitrary text, so each
