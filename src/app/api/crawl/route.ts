@@ -38,6 +38,19 @@ const SKIP_PATTERNS = [
   '/sitemap', '/login', '/logout', '/search', 'const_page=',
   'javascript:', '/uploaded/', '/staff-directory', // handled by ingest-staff
 
+  // Documents. These are handled by ingest-pdfs, which sends them to Claude to
+  // extract properly; this crawler would fetch the same URL, run htmlToText
+  // over PDF *binary*, and store the result. It did: 58 chunks across 23
+  // documents are byte soup like "%%EOF\r\nxref\r\n0 0\r\ntrailer" under an
+  // empty title, embedded and sitting in the search index.
+  //
+  // The compounding part is what those rows did to ingest-pdfs. It treats any
+  // existing row for a document URL as "already indexed", so each of those 23
+  // documents was permanently skipped — the garbage version was the only
+  // version that would ever exist. A supply list can be crawled into
+  // unreadable bytes and thereby made immune to being read.
+  '/fs/resource-manager/',
+
   // Governance and archive. '/board-of-directors' and '/board-minutes' were
   // here already but never matched anything — the real paths are '/board/…'
   // ('/board/board-meeting-agendas-meeting-minutes', '/board/board-highlights'),
@@ -138,11 +151,23 @@ export async function GET(req: NextRequest) {
   const supabase = getSupabaseAdmin()
   const now = new Date().toISOString()
 
-  // Delete old general TCA page chunks (leave staff, ical, gobound, teamreach alone)
+  /* Delete old general TCA page chunks (leave staff, ical, gobound, teamreach
+   * alone) — and, now, leave the extracted documents alone too.
+   *
+   * Documents are served from under this same host as
+   * /fs/resource-manager/view/<uuid>, so `ilike '<BASE>%'` matched every one of
+   * them. Measured: this delete removed 1,395 rows of which 590 — every single
+   * PDF document chunk in the corpus — were ingest-pdfs' work, wiped every
+   * Sunday at 03:00. ingest-pdfs then ran at 05:00 and re-extracted what it
+   * could reach in one run, paying Claude again for documents it had already
+   * read, and the backlog could never converge because the finish line moved
+   * back to zero weekly. That is the actual reason the PDF corpus never grew.
+   */
   await supabase.from('page_chunks')
     .delete()
     .ilike('url', `${BASE}%`)
     .not('url', 'ilike', '%staff-directory%')
+    .not('url', 'ilike', '%/fs/resource-manager/%')
 
   const queue: string[] = [...SEED_URLS]
   const visited = new Set<string>()

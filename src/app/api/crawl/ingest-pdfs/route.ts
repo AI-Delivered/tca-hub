@@ -131,34 +131,125 @@ function cleanTitle(linkText: string, url: string, sourcePage: string): string {
   return page ? `${page} — document` : text || url
 }
 
-const DISCOVERY_PAGE_LIMIT = 200
-// The site rate-limits: at 8-way concurrency a discovery sweep lost 77 of 150
-// pages, and every lost page is documents that silently never get found. At 4
-// with a pause between batches the same sweep landed 146 of 150.
-const FETCH_CONCURRENCY = 4
-const BATCH_PAUSE_MS = 200
-// Leaves headroom under maxDuration so the run reports what it did instead of
-// being killed mid-document. The old fixed cap of 20 documents per weekly run
-// meant a 150-document backlog would take two months to clear; this works until
-// the clock runs out and the next run picks up where it left off, because
-// already-indexed URLs are skipped.
+// The site rate-limits, and harder than the previous note here assumed. Fetching
+// the full page list in one sweep at 4-way concurrency was measured returning
+// 429 for 102 of 200 pages: the first ~98 succeed, the limiter's bucket empties,
+// and every request after that is refused until it refills on a timer. The lost
+// half was not random — supply lists, bell schedules, every elementary
+// grade-level page and both weekly-announcements pages were in it.
 //
-// 200s, not 240s, and the gap is deliberate. The budget is checked *before*
-// each document, so a document that starts just under the line still runs to
-// completion — a fetch (up to 20s), a Claude extraction, an embed call and its
-// inserts, comfortably 60s more. At 240s that lands right on maxDuration = 300
-// and Vercel kills the function mid-write; a local run overshot 300s and
-// tripped the client's own header timeout, which is what surfaced this.
-const RUN_BUDGET_MS = 200_000
+// Slowing down enough to fetch all 226 pages politely would cost most of the
+// 300s the function is allowed, which is the wrong trade: discovery is not the
+// scarce resource here, extraction is. See DISCOVERY_TARGET_DOCS.
+const FETCH_CONCURRENCY = 3
+const BATCH_PAUSE_MS = 400
+// A 429 means the bucket is empty, not that the page is unavailable, so one
+// paced retry recovers it. An immediate retry would only spend another token.
+const RATE_LIMIT_BACKOFF_MS = 3_000
+// If the limiter is refusing this many batches in a row, it is not going to
+// recover inside this run. Stop scanning and spend what's left of the clock
+// ingesting the documents already queued.
+const RATE_LIMIT_GIVE_UP_BATCHES = 4
+
+// Discovery stops once it has this many documents waiting to be ingested.
+//
+// A run extracts on the order of twenty documents before RUN_BUDGET_MS, so any
+// queue longer than that is work this run cannot do anyway — and scanning on to
+// build it costs the very minutes the extraction needed. Measured against the
+// live site with a 589-document backlog: a full sweep took ~100s and lost half
+// its pages to 429s, while stopping at the first full queue took 23s and lost
+// none.
+const DISCOVERY_TARGET_DOCS = 60
+// Hard stop for the scan even if the queue never fills, which is what happens
+// once the backlog is genuinely clear and discovery walks the whole site to
+// find nothing new. That case is fine and expected; it just must not eat the
+// ingest budget on the run where a new document finally appears.
+const DISCOVERY_BUDGET_MS = 60_000
+// How many documents are extracted at once. See the loop for why.
+const DOC_CONCURRENCY = 4
+const EXTRACTION_TIMEOUT_MS = 90_000
+
+// Leaves headroom under maxDuration so the run reports what it did instead of
+// being killed mid-batch. The budget is checked *before* each batch, so a batch
+// that starts just under the line still runs to completion: a fetch (up to
+// 20s), an extraction (capped at EXTRACTION_TIMEOUT_MS), an embed call and its
+// inserts. 170s + that worst case stays under maxDuration = 300; the previous
+// 200s did not once a document was allowed to generate 16,000 tokens, and a
+// local run overshot 300s, which is what surfaced this.
+//
+// The run works until the clock runs out and the next one picks up where it
+// left off, because already-indexed URLs are skipped.
+const RUN_BUDGET_MS = 170_000
 
 interface Discovered {
   url: string
   title: string
 }
 
-async function discover(pages: string[]): Promise<{ wanted: Discovered[]; excluded: Discovered[]; fetched: number; failed: number }> {
+// PostgREST answers with at most 1,000 rows however large a `limit` you ask
+// for, and says nothing about having truncated. Both of this route's url
+// lookups outgrew that silently. Paging with an explicit range is the only way
+// to know you have all of it: a short page is the end, a full page is not.
+const PAGE_SIZE = 1000
+
+async function fetchAllUrls(
+  query: (from: number, to: number) => PromiseLike<{ data: { url: string }[] | null }>
+): Promise<string[]> {
+  const urls: string[] = []
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data } = await query(from, from + PAGE_SIZE - 1)
+    const rows = data ?? []
+    for (const row of rows) urls.push(row.url)
+    if (rows.length < PAGE_SIZE) return urls
+  }
+}
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+const UA = { 'User-Agent': 'Mozilla/5.0 (compatible; TCAHub/1.0)' }
+
+type PageFetch = { html: string } | { rateLimited: boolean }
+
+async function fetchPage(url: string): Promise<PageFetch> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, { headers: UA, signal: AbortSignal.timeout(15000) })
+      if (res.ok) return { html: await res.text() }
+      if (res.status !== 429) return { rateLimited: false }
+      if (attempt === 0) await sleep(RATE_LIMIT_BACKOFF_MS)
+    } catch {
+      return { rateLimited: false }
+    }
+  }
+  return { rateLimited: true }
+}
+
+interface Discovery {
+  wanted: Discovered[]
+  excluded: Discovered[]
+  queue: Discovered[]
+  scanned: number
+  fetched: number
+  failed: number
+  rateLimited: number
+  stoppedEarly: boolean
+}
+
+/**
+ * Walks `pages` looking for document links, and stops as soon as it has enough
+ * unindexed ones to keep the extraction loop busy for the rest of the run.
+ *
+ * The queue is built here rather than by the caller for exactly that reason —
+ * knowing what is already indexed is what lets the scan know when to stop.
+ */
+async function discover(pages: string[], indexed: Set<string>, deadline: number): Promise<Discovery> {
   let fetched = 0
   let failed = 0
+  let rateLimited = 0
+  let consecutiveRateLimitedBatches = 0
+  let scanned = 0
+  let stoppedEarly = false
+  const queue: Discovered[] = []
 
   // url -> the link's anchor text, which is what the document is actually
   // called ("Central - 2nd Grade Supply List 2026-27") as opposed to the UUID
@@ -168,46 +259,62 @@ async function discover(pages: string[]): Promise<{ wanted: Discovered[]; exclud
   const found = new Map<string, { text: string; page: string }>()
 
   for (let i = 0; i < pages.length; i += FETCH_CONCURRENCY) {
-    await Promise.all(pages.slice(i, i + FETCH_CONCURRENCY).map(async page => {
-      try {
-        const res = await fetch(page, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; TCAHub/1.0)' },
-          signal: AbortSignal.timeout(15000),
-        })
-        if (!res.ok) { failed++; return }
-        fetched++
-        const html = await res.text()
-        for (const pattern of LINK_PATTERNS) {
-          // Shared regex objects carry lastIndex between uses; matchAll on a
-          // /g regex resets it, but be explicit rather than depend on that.
-          pattern.lastIndex = 0
-          for (const m of html.matchAll(pattern)) {
-            const href = m[1].startsWith('http') ? m[1] : `https://www.tcatitans.org${m[1]}`
-            const text = m[2]
-              .replace(/<[^>]+>/g, ' ')
-              .replace(/&nbsp;/g, ' ')
-              .replace(/&amp;/g, '&')
-              .replace(/&#39;/g, "'")
-              .replace(/\s+/g, ' ')
-              .trim()
-              .slice(0, 120)
-            if (!found.has(href)) found.set(href, { text, page })
+    const batch = pages.slice(i, i + FETCH_CONCURRENCY)
+    scanned += batch.length
+    let batchRateLimited = 0
+
+    await Promise.all(batch.map(async page => {
+      const result = await fetchPage(page)
+      if (!('html' in result)) {
+        failed++
+        if (result.rateLimited) { rateLimited++; batchRateLimited++ }
+        return /* page unavailable this run — a later run will catch it */
+      }
+      fetched++
+      for (const pattern of LINK_PATTERNS) {
+        // Shared regex objects carry lastIndex between uses; matchAll on a
+        // /g regex resets it, but be explicit rather than depend on that.
+        pattern.lastIndex = 0
+        for (const m of result.html.matchAll(pattern)) {
+          const href = m[1].startsWith('http') ? m[1] : `https://www.tcatitans.org${m[1]}`
+          const text = m[2]
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&#39;/g, "'")
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 120)
+          if (found.has(href)) continue
+          found.set(href, { text, page })
+          // Filtered on the raw anchor text, not the cleaned title: the filename
+          // and page-name fallbacks could reintroduce a word the blocklist just
+          // removed.
+          if (isWanted(text) && !indexed.has(href)) {
+            queue.push({ url: href, title: cleanTitle(text, href, page) })
           }
         }
-      } catch { failed++ /* page unavailable this run — the next one will catch it */ }
+      }
     }))
-    await new Promise(r => setTimeout(r, BATCH_PAUSE_MS))
+
+    consecutiveRateLimitedBatches = batchRateLimited === batch.length
+      ? consecutiveRateLimitedBatches + 1
+      : 0
+
+    if (queue.length >= DISCOVERY_TARGET_DOCS) { stoppedEarly = true; break }
+    if (Date.now() > deadline) { stoppedEarly = true; break }
+    if (consecutiveRateLimitedBatches >= RATE_LIMIT_GIVE_UP_BATCHES) { stoppedEarly = true; break }
+
+    await sleep(BATCH_PAUSE_MS)
   }
 
   const wanted: Discovered[] = []
   const excluded: Discovered[] = []
   for (const [url, { text, page }] of found) {
     const entry = { url, title: cleanTitle(text, url, page) }
-    // Filtered on the raw anchor text, not the cleaned title: the filename and
-    // page-name fallbacks could reintroduce a word the blocklist just removed.
     ;(isWanted(text) ? wanted : excluded).push(entry)
   }
-  return { wanted, excluded, fetched, failed }
+  return { wanted, excluded, queue, scanned, fetched, failed, rateLimited, stoppedEarly }
 }
 
 export async function POST(req: NextRequest) {
@@ -221,65 +328,83 @@ export async function POST(req: NextRequest) {
 
   const supabase = getSupabaseAdmin()
 
+  /* Which documents are already in the corpus.
+   *
+   * This has to be complete or the run does damage rather than nothing: a
+   * document missing from this set gets re-fetched, re-extracted by Claude and
+   * re-embedded, every single run, forever. The old query relied on PostgREST's
+   * default page — which caps at 1,000 rows no matter what — and there are
+   * currently 588 document chunks, so it happened to be right. At 3.5 chunks
+   * per document the 589-document backlog projects to ~2,660, at which point
+   * roughly 60% of the corpus would have looked un-ingested and been paid for
+   * again weekly. Same cap that broke page discovery a change ago, one query
+   * over; fixed here before it starts costing money rather than after.
+   */
+  const indexed = new Set(
+    await fetchAllUrls((from, to) =>
+      supabase.from('page_chunks').select('url')
+        .or('url.ilike.%resource-manager%,url.ilike.%finalsite.net%')
+        .order('url').range(from, to))
+  )
+
   /* The page list this route crawls for document links.
    *
-   * Two things made this shrink as the route succeeded, which is the worst
-   * possible direction for it to move.
-   *
-   * PostgREST caps a response at 1,000 rows regardless of what `limit` asks
-   * for, so `.limit(2000)` silently returned 1,000 of 1,356 — a ceiling that
-   * looked like it had headroom and did not.
-   *
-   * Worse, documents live under tcatitans.org too, so every PDF this route
-   * ingested added chunks that matched the same filter and consumed rows of
-   * that 1,000 before the JS filter could drop them. Measured mid-backlog:
-   * 475 of 1,000 rows were resource-manager chunks, leaving 93 distinct pages
-   * to scan where there had been 150+. Each successful run therefore found
-   * fewer pages, which found fewer documents — a loop that tightened around
-   * itself the more work it did.
-   *
-   * Excluding documents in SQL spends the whole row budget on pages. The
-   * ordering makes the truncation predictable rather than arbitrary.
+   * Documents live under tcatitans.org too, so every PDF this route ingests
+   * adds chunks matching the same filter. Excluding them in SQL is what stopped
+   * the page list from shrinking as the route succeeded — measured mid-backlog,
+   * 475 of 1,000 rows were resource-manager chunks and only 93 distinct pages
+   * survived, so each successful run discovered less than the one before it.
    */
-  const { data: pageRows } = await supabase
-    .from('page_chunks')
-    .select('url')
-    .ilike('url', 'https://www.tcatitans.org/%')
-    .not('url', 'ilike', '%/fs/resource-manager/%')
-    .order('url')
-    .limit(1000)
+  const pageUrls = await fetchAllUrls((from, to) =>
+    supabase.from('page_chunks').select('url')
+      .ilike('url', 'https://www.tcatitans.org/%')
+      .not('url', 'ilike', '%/fs/resource-manager/%')
+      .order('url').range(from, to))
 
-  const pages = [...new Set((pageRows ?? []).map(r => r.url.split('#')[0]))]
+  const pages = [...new Set(pageUrls.map(u => u.split('#')[0]))]
     .filter(u => !SKIP_PAGE.some(re => re.test(u)))
-    .slice(0, DISCOVERY_PAGE_LIMIT)
 
-  const { wanted, excluded, fetched, failed } = await discover(pages)
+  /* Where in the page list this run starts.
+   *
+   * Scanning until the queue fills means always scanning the same alphabetical
+   * head, and a document that can never be ingested — a link to a file that
+   * 404s, a PDF Claude cannot read — would hold a queue slot indefinitely and
+   * keep the scan from ever reaching the pages behind it. Advancing the start
+   * each day sweeps the whole site regardless of what is stuck at the front.
+   * The stride is coprime with any plausible page count, so consecutive runs
+   * land far apart instead of shuffling forward one page at a time.
+   */
+  const startOffset = pages.length ? (Math.floor(Date.now() / 86_400_000) * 53) % pages.length : 0
+  const rotated = [...pages.slice(startOffset), ...pages.slice(0, startOffset)]
 
-  // Which documents are already in the corpus. The old query only looked for
-  // '%resource-manager%', so every CDN document would have been re-extracted
-  // and re-embedded on every single run — paying for the same PDF weekly.
-  const indexed = new Set<string>()
-  for (const pattern of ['%resource-manager%', '%finalsite.net%']) {
-    const { data } = await supabase.from('page_chunks').select('url').ilike('url', pattern)
-    for (const row of data ?? []) indexed.add(row.url)
+  const { wanted, excluded, queue, scanned, fetched, failed, rateLimited, stoppedEarly } =
+    await discover(rotated, indexed, startedAt + DISCOVERY_BUDGET_MS)
+
+  const discoveryStats = {
+    pagesAvailable: pages.length,
+    pagesScannedFrom: startOffset,
+    pagesScanned: scanned,
+    pagesFetched: fetched,
+    pagesFailed: failed,
+    pagesRateLimited: rateLimited,
+    // True on any healthy run with a backlog: the scan found enough to do and
+    // handed the clock to the extraction loop. Only worth attention if it is
+    // true *and* nothing got ingested.
+    discoveryStoppedEarly: stoppedEarly,
+    discoveredOnScannedPages: wanted.length + excluded.length,
+    excludedAsNoise: excluded.length,
   }
-
-  const queue = wanted.filter(d => !indexed.has(d.url))
 
   if (dryRun) {
     return NextResponse.json({
       dryRun: true,
-      pagesScanned: pages.length,
-      pagesFetched: fetched,
-      pagesFailed: failed,
-      discovered: wanted.length + excluded.length,
-      wanted: wanted.length,
-      excludedAsNoise: excluded.length,
-      alreadyIndexed: wanted.length - queue.length,
+      ...discoveryStats,
+      alreadyIndexedCorpusWide: indexed.size,
       wouldIngest: queue.length,
       estimatedCostUsd: Number((queue.length * 0.0064).toFixed(2)),
       wouldIngestTitles: queue.map(d => d.title || d.url),
       sampleExcluded: excluded.slice(0, 25).map(d => d.title || d.url),
+      elapsedMs: Date.now() - startedAt,
     })
   }
 
@@ -292,16 +417,17 @@ export async function POST(req: NextRequest) {
   let ranOutOfTime = false
   const truncated: string[] = []
 
-  for (const doc of queue) {
-    if (Date.now() - startedAt > RUN_BUDGET_MS) { ranOutOfTime = true; break }
-    processed++
-
+  /**
+   * Fetch one document, extract its text, and store it.
+   *
+   * Split out of the loop so documents can run concurrently. They share nothing
+   * — each writes only rows under its own url, and deletes only its own url
+   * first — so the only ordering that ever mattered was the loop's.
+   */
+  async function ingestOne(doc: Discovered): Promise<void> {
     try {
-      const res = await fetch(doc.url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; TCAHub/1.0)' },
-        signal: AbortSignal.timeout(20000),
-      })
-      if (!res.ok) { skipped++; continue }
+      const res = await fetch(doc.url, { headers: UA, signal: AbortSignal.timeout(20000) })
+      if (!res.ok) { skipped++; return }
 
       const contentType = res.headers.get('content-type') ?? ''
       const buffer = await res.arrayBuffer()
@@ -336,6 +462,15 @@ export async function POST(req: NextRequest) {
               },
             ],
           }],
+        }, {
+          // A ceiling on the single slowest thing this route does. Extraction
+          // was measured at ~34s for a typical document, but 16,000 output
+          // tokens is a couple of minutes of generation, and the run budget is
+          // checked before a document starts, not while it runs — so one long
+          // handbook could carry the function past maxDuration and have it
+          // killed with nothing returned. Better to lose that one document,
+          // which the next run retries, than the run's report.
+          timeout: EXTRACTION_TIMEOUT_MS,
         })
         content = msg.content[0].type === 'text' ? msg.content[0].text : ''
 
@@ -362,7 +497,7 @@ export async function POST(req: NextRequest) {
       // paid to extract it again — forever.
       content = sanitizeForPostgres(content)
 
-      if (!content || content.length < 100) { skipped++; continue }
+      if (!content || content.length < 100) { skipped++; return }
 
       // The link's anchor text, so retrieval and the sources list under an
       // answer show "Central - 2nd Grade Supply List 2026-27" instead of
@@ -395,20 +530,36 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  /* Documents run concurrently because extraction is almost entirely waiting.
+   *
+   * Measured serially: 6 documents in 226s, ~34s each, nearly all of it Claude
+   * generating the extracted text. Nothing about that time is this function's
+   * work, and the documents are independent, so running them one at a time was
+   * simply choosing to wait six times in a row.
+   *
+   * Four at a time, not more: the run is bounded by the clock rather than by
+   * the queue, so extra parallelism past what fills the budget only widens the
+   * burst of concurrent API calls without ingesting more.
+   */
+  for (let i = 0; i < queue.length; i += DOC_CONCURRENCY) {
+    if (Date.now() - startedAt > RUN_BUDGET_MS) { ranOutOfTime = true; break }
+    const batch = queue.slice(i, i + DOC_CONCURRENCY)
+    processed += batch.length
+    await Promise.all(batch.map(ingestOne))
+  }
+
   return NextResponse.json({
-    pagesScanned: pages.length,
-    pagesFetched: fetched,
-    pagesFailed: failed,
-    discovered: wanted.length + excluded.length,
-    excludedAsNoise: excluded.length,
+    ...discoveryStats,
+    alreadyIndexedCorpusWide: indexed.size,
     queued: queue.length,
     processed,
     chunksIndexed: indexedCount,
     skipped,
     errors,
-    // Says plainly that there is more to do, rather than looking like a clean
-    // finish that happened to index fewer documents than expected.
-    remaining: ranOutOfTime ? queue.length - processed : 0,
+    // Only what this run's scan turned up and did not get to. The site-wide
+    // backlog is deliberately no longer reported: the scan stops as soon as it
+    // has enough to do, so it does not know the total and would be guessing.
+    remainingInThisScan: ranOutOfTime ? queue.length - processed : 0,
     // Documents whose text was cut off. Should be zero; anything here is a
     // document in the corpus that is only partly there.
     truncatedCount: truncated.length,
