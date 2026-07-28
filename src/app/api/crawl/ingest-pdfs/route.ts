@@ -167,7 +167,28 @@ const DISCOVERY_TARGET_DOCS = 60
 const DISCOVERY_BUDGET_MS = 60_000
 // How many documents are extracted at once. See the loop for why.
 const DOC_CONCURRENCY = 4
-const EXTRACTION_TIMEOUT_MS = 90_000
+
+const EXTRACT_PROMPT =
+  'Extract all text content from this TCA school document. Include all dates, times, names, grades, events, deadlines, and details. Output as plain structured text.'
+const CONTINUE_PROMPT =
+  'Continue the extraction from exactly where you stopped. Do not repeat anything already extracted and do not add any preamble.'
+
+// One extraction call. 90s was too tight and would have permanently failed the
+// documents that most need extracting: a measured first call on an 85,000-
+// character notice took 174s on its own.
+const EXTRACTION_TIMEOUT_MS = 180_000
+// Rounds of continuation before giving up on a document. The one measured case
+// needed two; three leaves room without letting a pathological document eat a
+// whole run.
+const MAX_EXTRACTION_ROUNDS = 3
+// Stop starting new continuation rounds this far into the run, so the function
+// returns its report rather than being killed at maxDuration = 300.
+const EXTRACTION_DEADLINE_MS = 250_000
+// A PDF over this size is assumed to be one of the slow ones and is only
+// started early in a run. 400 KB is comfortably above the supply lists and
+// letters that make up most of the corpus.
+const BIG_PDF_BYTES = 400_000
+const BIG_DOC_START_CUTOFF_MS = 40_000
 
 // Leaves headroom under maxDuration so the run reports what it did instead of
 // being killed mid-batch. The budget is checked *before* each batch, so a batch
@@ -413,9 +434,14 @@ export async function POST(req: NextRequest) {
   const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
+  type MessageParam = Parameters<typeof anthropic.messages.create>[0]['messages'][number]
+
   let indexedCount = 0, skipped = 0, errors = 0, processed = 0
   let ranOutOfTime = false
-  const truncated: string[] = []
+  // Documents left for a later run rather than stored wrong: `incomplete` ran
+  // out of extraction rounds, `deferred` was too big to start this late.
+  const incomplete: string[] = []
+  const deferred: string[] = []
 
   /**
    * Fetch one document, extract its text, and store it.
@@ -435,53 +461,85 @@ export async function POST(req: NextRequest) {
       let content = ''
 
       if (contentType.includes('pdf') || doc.url.toLowerCase().endsWith('.pdf')) {
-        const msg = await anthropic.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          // 2048 was roughly three pages of extracted text, and a document
-          // that ran past it was silently cut off mid-sentence — a 30-page
-          // handbook became its table of contents, with nothing anywhere
-          // saying so. Output is billed per token *generated*, not per token
-          // allowed, so a high ceiling costs nothing on the one-page supply
-          // lists that make up most of the corpus and simply stops throwing
-          // away the long documents.
-          max_tokens: 16_000,
-          messages: [{
-            role: 'user',
-            content: [
-              {
-                type: 'document',
-                source: {
-                  type: 'base64',
-                  media_type: 'application/pdf',
-                  data: Buffer.from(buffer).toString('base64'),
-                },
-              },
-              {
-                type: 'text',
-                text: 'Extract all text content from this TCA school document. Include all dates, times, names, grades, events, deadlines, and details. Output as plain structured text.',
-              },
-            ],
-          }],
-        }, {
-          // A ceiling on the single slowest thing this route does. Extraction
-          // was measured at ~34s for a typical document, but 16,000 output
-          // tokens is a couple of minutes of generation, and the run budget is
-          // checked before a document starts, not while it runs — so one long
-          // handbook could carry the function past maxDuration and have it
-          // killed with nothing returned. Better to lose that one document,
-          // which the next run retries, than the run's report.
-          timeout: EXTRACTION_TIMEOUT_MS,
-        })
-        content = msg.content[0].type === 'text' ? msg.content[0].text : ''
+        /* A big document is slow enough to need most of the function to itself.
+         *
+         * Measured on "Procedural Safeguards": the first extraction call alone
+         * took 174s and still stopped at the token ceiling; finishing it took a
+         * second call and 198s in total. Started late in a run that overruns
+         * maxDuration and the function is killed with nothing returned, so a
+         * document this size only starts while there is still real clock left.
+         * Skipped, not failed — it stays unindexed and the next run retries it,
+         * and the rotating scan start means it won't always land in the same
+         * position in the queue.
+         */
+        if (buffer.byteLength > BIG_PDF_BYTES && Date.now() - startedAt > BIG_DOC_START_CUTOFF_MS) {
+          deferred.push(doc.title || doc.url)
+          return
+        }
 
-        // Even at 16k a document can run out of room. The model says so, and
-        // the old code never asked — which is the actual defect here, more than
-        // the limit itself: silent truncation looks identical to a short
-        // document, so the corpus quietly held partial handbooks with no way
-        // to tell. Counted and returned, so a run that truncates says so.
-        if (msg.stop_reason === 'max_tokens') {
-          truncated.push(doc.title || doc.url)
-          console.warn(`ingest-pdfs: extraction hit the token ceiling, content is incomplete — ${doc.title} (${doc.url})`)
+        const docBlock = {
+          type: 'document' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: 'application/pdf' as const,
+            data: Buffer.from(buffer).toString('base64'),
+          },
+        }
+
+        /* Extraction continues until the model says it is done.
+         *
+         * max_tokens is a ceiling on one *response*, not on the document, and
+         * a document that ran past it was stored as whatever fitted. Raising
+         * the ceiling from 2,048 to 16,000 made that rarer without making it
+         * impossible: "Procedural Safeguards" is 84,641 characters and the
+         * corpus held 43,492 of them — 51% of a special-education rights
+         * notice, indistinguishable from a complete short document, and
+         * permanently so, because the partial row is what marks the URL
+         * indexed and stops it ever being read again.
+         *
+         * Asking the model to carry on from where it stopped is all it takes;
+         * the one measured case needed exactly one extra round.
+         */
+        let messages: MessageParam[] = [{
+          role: 'user',
+          content: [docBlock, { type: 'text', text: EXTRACT_PROMPT }],
+        }]
+        let complete = false
+        let rounds = 0
+
+        while (rounds < MAX_EXTRACTION_ROUNDS) {
+          rounds++
+          const msg = await anthropic.messages.create({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 16_000,
+            messages,
+          }, { timeout: EXTRACTION_TIMEOUT_MS })
+
+          const text = msg.content[0]?.type === 'text' ? msg.content[0].text : ''
+          content += text
+
+          if (msg.stop_reason !== 'max_tokens') { complete = true; break }
+          if (Date.now() - startedAt > EXTRACTION_DEADLINE_MS) break
+
+          messages = [
+            ...messages,
+            { role: 'assistant', content: text },
+            { role: 'user', content: CONTINUE_PROMPT },
+          ]
+        }
+
+        /* An extraction known to be incomplete is not stored at all.
+         *
+         * This is the whole point of the change. Storing the partial is what
+         * made it permanent: the row marks the URL as indexed, so the document
+         * is never queued again and the missing half can never arrive. Leaving
+         * it out costs this run the document and gets the next run a clean
+         * attempt at the whole thing.
+         */
+        if (!complete) {
+          incomplete.push(doc.title || doc.url)
+          console.warn(`ingest-pdfs: extraction still incomplete after ${rounds} rounds, not storing — ${doc.title} (${doc.url})`)
+          return
         }
       } else {
         content = Buffer.from(buffer).toString('utf-8')
@@ -560,10 +618,12 @@ export async function POST(req: NextRequest) {
     // backlog is deliberately no longer reported: the scan stops as soon as it
     // has enough to do, so it does not know the total and would be guessing.
     remainingInThisScan: ranOutOfTime ? queue.length - processed : 0,
-    // Documents whose text was cut off. Should be zero; anything here is a
-    // document in the corpus that is only partly there.
-    truncatedCount: truncated.length,
-    truncatedDocuments: truncated,
+    // Documents deliberately not stored this run, so nothing here is a partial
+    // document sitting in the corpus — these are all retried next run.
+    incompleteCount: incomplete.length,
+    incompleteDocuments: incomplete,
+    deferredAsTooLargeCount: deferred.length,
+    deferredAsTooLarge: deferred,
     elapsedMs: Date.now() - startedAt,
   })
 }
