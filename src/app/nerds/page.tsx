@@ -500,7 +500,7 @@ const SORT_OPTIONS: { key: string; label: string }[] = [
   { key: 'oldest', label: 'Oldest first' },
   { key: 'slowest', label: 'Slowest' },
   { key: 'weakest', label: 'Weakest match' },
-  { key: 'costliest', label: 'Most tokens' },
+  { key: 'costliest', label: 'Most expensive' },
 ]
 
 function fmtInt(n: number) {

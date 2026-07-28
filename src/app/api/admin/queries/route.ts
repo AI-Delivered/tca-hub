@@ -253,6 +253,42 @@ export async function GET(req: Request) {
     return steps
   }
 
+  /* "Costliest" cannot be an ORDER BY, because cost is not a column.
+   *
+   * It used to sort by output_tokens, on the reasonable-sounding grounds that
+   * output is billed at 5x input. Measured over the whole log, input is 96% of
+   * what this app actually spends — answers are short and the retrieved context
+   * is not. So the sort was ranking by about 4% of the bill: the single most
+   * expensive query on record, 126,750 input tokens for $0.127, sat at #236 in
+   * the costliest view, and only 3 of the true top 10 appeared in it at all.
+   *
+   * Sorting by input_tokens instead is no better — 2 of 10 — because the
+   * priciest rows are Sonnet, where a token costs 3x what it does on Haiku.
+   * Neither column ranks cost; only input, output and model together do.
+   *
+   * So this reads the tokens for the filtered window, ranks in JS, and then
+   * fetches only the page's rows. The scan is capped and says when it truncated
+   * rather than quietly ranking a subset.
+   */
+  const COST_SCAN_CAP = 20_000
+
+  const costRankedIds = async (withDetail: boolean): Promise<{ ids: number[]; total: number; truncated: boolean }> => {
+    const scanned: Pick<Row, 'id' | 'model' | 'input_tokens' | 'output_tokens'>[] = []
+    let truncated = false
+    for (let from = 0; from < COST_SCAN_CAP; from += 1000) {
+      const { data } = await applySteps(
+        supabase.from('query_log').select('id, model, input_tokens, output_tokens').gte('created_at', since),
+        filterSteps(status, withDetail)
+      ).order('id', { ascending: false }).range(from, from + 999)
+      const page = (data ?? []) as unknown as typeof scanned
+      scanned.push(...page)
+      if (page.length < 1000) break
+      if (from + 1000 >= COST_SCAN_CAP) truncated = true
+    }
+    scanned.sort((a, b) => (costOf(b as Row) ?? 0) - (costOf(a as Row) ?? 0) || b.id - a.id)
+    return { ids: scanned.slice(offset, offset + limit).map(r => r.id), total: scanned.length, truncated }
+  }
+
   const run = (withDetail: boolean) => {
     const base = supabase
       .from('query_log')
@@ -266,6 +302,20 @@ export async function GET(req: Request) {
       // can reshuffle between pages and the same row shows up twice.
       .order('id', { ascending: false })
       .range(offset, offset + limit - 1)
+  }
+
+  const runByCost = async (withDetail: boolean) => {
+    const { ids, total, truncated } = await costRankedIds(withDetail)
+    if (!ids.length) return { data: [], error: null, count: total, costTruncated: truncated }
+    const { data, error } = await supabase
+      .from('query_log')
+      .select(withDetail ? FULL_COLUMNS : LEGACY_COLUMNS)
+      .in('id', ids)
+    // `.in` returns rows in whatever order Postgres likes; the ranking is ours.
+    const order = new Map(ids.map((id, i) => [id, i]))
+    const sorted = ((data ?? []) as unknown as Row[]).slice()
+      .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+    return { data: sorted as unknown as typeof data, error, count: total, costTruncated: truncated }
   }
 
   // How many rows sit behind each chip, under the current search and range.
@@ -284,7 +334,15 @@ export async function GET(req: Request) {
   }
 
   let withDetail = detailColumnsExist !== false
-  let { data, error, count } = await run(withDetail)
+  let costTruncated = false
+  const execute = async (detail: boolean) => {
+    if (sortKey !== 'costliest') return { ...(await run(detail)), costTruncated: false }
+    return await runByCost(detail)
+  }
+  let { data, error, count } = await execute(withDetail).then(r => {
+    costTruncated = r.costTruncated
+    return r
+  })
 
   if (error && withDetail && isMissingColumn(error)) {
     console.warn(
@@ -293,7 +351,7 @@ export async function GET(req: Request) {
     )
     detailColumnsExist = false
     withDetail = false
-    ;({ data, error, count } = await run(false))
+    ;({ data, error, count, costTruncated } = await execute(false))
   } else if (!error && withDetail) {
     detailColumnsExist = true
   }
@@ -345,5 +403,8 @@ export async function GET(req: Request) {
     // Lets the UI say "run the migration to see sources" rather than silently
     // showing every row as having none.
     detail: withDetail,
+    // True only when the cost ranking had to stop short of the whole window.
+    // A ranking built from a subset should say so rather than look complete.
+    costRankTruncated: costTruncated,
   })
 }
