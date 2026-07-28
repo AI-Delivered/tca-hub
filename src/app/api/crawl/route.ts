@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { fetchAllUrls } from '@/lib/page-urls'
+import { pageBody } from '@/lib/page-body'
 
 export const maxDuration = 300
 
@@ -230,7 +231,13 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Embed and insert pages with content
+    /* Embed and insert pages that have content of their own.
+     *
+     * The filter used to be on the raw text, which includes the ~200 characters
+     * of navigation every page carries, so a page consisting of nothing but
+     * chrome cleared a 150-character floor on chrome alone. See lib/page-body.
+     */
+    for (const res of results) if (res.r) res.r.text = pageBody(res.r.text)
     const toEmbed = results.filter(({ r }) => r && r.text.length >= 150)
     if (!toEmbed.length) { skipped += batch.length; continue }
 

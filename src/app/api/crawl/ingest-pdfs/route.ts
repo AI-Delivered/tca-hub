@@ -208,6 +208,66 @@ interface Discovered {
   title: string
 }
 
+/* Pages scanned before any others, whatever the rotation says.
+ *
+ * Discovery stops as soon as it has a full queue, so which pages it reaches
+ * first decides what a parent can ask about this week. That is fine for the
+ * long tail and wrong for the handful of pages carrying the questions people
+ * actually ask.
+ *
+ * The high school and junior high bell schedule pages are the case that found
+ * this. Both are an empty shell — 279 characters of site chrome — around a link
+ * to High_School_Bell_Schedule.pdf, where the times actually live. So "what
+ * time does the high school day end on Wednesdays" could not be answered at
+ * all, while the same question for any elementary campus could, because those
+ * pages have their times in HTML. The PDF was sitting in the backlog behind
+ * several hundred phonogram worksheets.
+ */
+const SEED_PAGES = [
+  '/family/school-hoursbell-schedule',
+  '/family/school-hoursbell-schedule/high-school-hoursbell-schedule',
+  '/family/school-hoursbell-schedule/junior-high-school-hoursbell-schedule',
+  '/family/school-hoursbell-schedule/central-elementary-hoursbell-schedule',
+  '/family/school-hoursbell-schedule/east-elementary-hoursbell-schedule',
+  '/family/school-hoursbell-schedule/north-elementary-hoursbell-schedule',
+  '/family/schools-supply-lists',
+  '/family/lunch-information',
+  '/family/uniformdress-code',
+  '/family/student-fees',
+  '/family/carpool',
+  '/family/handbook',
+  '/family/attendance-absences',
+].map(p => `https://www.tcatitans.org${p}`)
+
+/* Ordering within the queue. Nothing is excluded by this.
+ *
+ * The queue is always longer than one run can extract, so without an order it
+ * is alphabetical by whatever page happened to be scanned — which is how a bell
+ * schedule ends up behind "Addition or Subtraction War Directions". These are
+ * the shapes of question this app exists to answer; everything else still gets
+ * ingested, just after them.
+ */
+const PRIORITY_TERMS = [
+  /\bbell schedule\b/i,
+  /\bhours\b/i,
+  /\bcalendar\b/i,
+  /\bsupply list\b/i,
+  /\bhandbook\b/i,
+  /\b(dress code|uniform)\b/i,
+  /\bfees?\b/i,
+  /\b(lunch|menu)\b/i,
+  /\b(carpool|drop.?off|pick.?up)\b/i,
+  /\bschedule\b/i,
+]
+
+function priorityOf(doc: Discovered): number {
+  const text = doc.title
+  for (let i = 0; i < PRIORITY_TERMS.length; i++) {
+    if (PRIORITY_TERMS[i].test(text)) return PRIORITY_TERMS.length - i
+  }
+  return 0
+}
+
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 const UA = { 'User-Agent': 'Mozilla/5.0 (compatible; TCAHub/1.0)' }
@@ -381,11 +441,23 @@ export async function POST(req: NextRequest) {
   const startOffset = pages.length ? (Math.floor(Date.now() / 86_400_000) * 53) % pages.length : 0
   const rotated = [...pages.slice(startOffset), ...pages.slice(0, startOffset)]
 
+  // Seeds first, then the rotating window. Seeds are cheap to re-scan — their
+  // documents are already indexed on any run after the first, so they cost a
+  // fetch each and add nothing to the queue.
+  const seeds = SEED_PAGES.filter(u => pages.includes(u))
+  const seedSet = new Set(seeds)
+  const ordered = [...seeds, ...rotated.filter(u => !seedSet.has(u))]
+
   const { wanted, excluded, queue, scanned, fetched, failed, rateLimited, stoppedEarly } =
-    await discover(rotated, indexed, startedAt + DISCOVERY_BUDGET_MS)
+    await discover(ordered, indexed, startedAt + DISCOVERY_BUDGET_MS)
+
+  // Highest-value documents first. Stable within a priority band, so the
+  // ordering is otherwise the order they were discovered in.
+  queue.sort((a, b) => priorityOf(b) - priorityOf(a))
 
   const discoveryStats = {
     pagesAvailable: pages.length,
+    seedPagesScanned: seeds.length,
     pagesScannedFrom: startOffset,
     pagesScanned: scanned,
     pagesFetched: fetched,
