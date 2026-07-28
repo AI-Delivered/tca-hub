@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { sanitizeForPostgres } from '@/lib/ingest-chunks'
+import { fetchAllUrls } from '@/lib/page-urls'
 
 export const maxDuration = 300
 
@@ -205,24 +206,6 @@ const RUN_BUDGET_MS = 170_000
 interface Discovered {
   url: string
   title: string
-}
-
-// PostgREST answers with at most 1,000 rows however large a `limit` you ask
-// for, and says nothing about having truncated. Both of this route's url
-// lookups outgrew that silently. Paging with an explicit range is the only way
-// to know you have all of it: a short page is the end, a full page is not.
-const PAGE_SIZE = 1000
-
-async function fetchAllUrls(
-  query: (from: number, to: number) => PromiseLike<{ data: { url: string }[] | null }>
-): Promise<string[]> {
-  const urls: string[] = []
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data } = await query(from, from + PAGE_SIZE - 1)
-    const rows = data ?? []
-    for (const row of rows) urls.push(row.url)
-    if (rows.length < PAGE_SIZE) return urls
-  }
 }
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
