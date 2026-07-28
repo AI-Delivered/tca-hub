@@ -1,5 +1,6 @@
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { queryKey } from '@/lib/query-key'
+import { saidItCouldNotAnswer } from '@/lib/unanswered'
 import { secretMatches } from '@/lib/auth'
 
 export const maxDuration = 30
@@ -231,7 +232,11 @@ export async function GET(req: Request) {
   const total = rows.length
   const allNoResults = rows.filter(r => r.had_results === false)
   const withResults = rows.filter(r => r.had_results === true)
-  const allThinResults = withResults.filter(r => (r.top_similarity ?? 1) < 0.6)
+  // "Thin" is what the answer said, not what the retrieval scored — see
+  // lib/unanswered.ts. The old `top_similarity < 0.6` counted 107 good answers
+  // as thin and missed nine that told the parent outright we had nothing,
+  // because a keyword anchor had stamped 0.90 on them.
+  const allThinResults = withResults.filter(r => saidItCouldNotAnswer(r.answer_preview))
 
   // The needs-attention lists describe the CURRENT state of each question, not
   // its history: a question is judged by its most recent run, so one that's since
@@ -250,7 +255,7 @@ export async function GET(req: Request) {
   const stillFailing = (r: LogRow) => {
     const latest = latestRun.get(normalize(r.query))
     if (!latest) return true
-    return latest.had_results === false || (latest.top_similarity ?? 1) < 0.6
+    return latest.had_results === false || saidItCouldNotAnswer(latest.answer_preview)
   }
 
   const noResults = allNoResults.filter(stillFailing)
@@ -311,7 +316,7 @@ export async function GET(req: Request) {
   // "which questions are we failing on," with how often each was asked vs. failed.
   const stillBroken = (query: string) => {
     const latest = latestRun.get(normalize(query))
-    return !latest || latest.had_results === false || (latest.top_similarity ?? 1) < 0.6
+    return !latest || latest.had_results === false || saidItCouldNotAnswer(latest.answer_preview)
   }
 
   const noContextHitQueries = [...freq.values()]

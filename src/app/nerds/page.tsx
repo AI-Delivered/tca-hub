@@ -1095,7 +1095,7 @@ export default function AdminDashboard() {
                 sub={`${stats.noResultCount} of ${stats.total}`}
                 tone={stats.noResultRate > 0.1 ? 'bad' : undefined}
               />
-              <Card label="Thin context" value={String(stats.thinResultCount)} sub="found something, weak match" />
+              <Card label="Couldn't answer" value={String(stats.thinResultCount)} sub="found context, still said we don't have it" />
               <Card
                 label="Avg latency"
                 value={stats.avgLatency != null ? `${(stats.avgLatency / 1000).toFixed(1)}s` : '—'}

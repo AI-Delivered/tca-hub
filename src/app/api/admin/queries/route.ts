@@ -14,6 +14,7 @@
 
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { secretMatches } from '@/lib/auth'
+import { UNANSWERED_ILIKE, saidItCouldNotAnswer, unansweredOrFilter } from '@/lib/unanswered'
 
 export const maxDuration = 30
 
@@ -23,9 +24,6 @@ const PRICING: Record<'haiku' | 'sonnet', { input: number; output: number }> = {
   haiku: { input: 1.0, output: 5.0 },
   sonnet: { input: 3.0, output: 15.0 },
 }
-
-/** Matches the dashboard's definition of a weak retrieval hit. */
-const THIN_THRESHOLD = 0.6
 
 const PAGE_SIZE_DEFAULT = 25
 const PAGE_SIZE_MAX = 100
@@ -92,6 +90,10 @@ function costOf(row: Row): number | null {
   )
 }
 
+// See lib/unanswered.ts for what "thin" means and why it stopped meaning
+// "low similarity".
+const unansweredOr = unansweredOrFilter()
+
 /** Order matters — a failed generation is a failure first and a thin match second. */
 function statusOf(row: Row): QueryStatus {
   // Rows written before migration 004 recorded the question and nothing else.
@@ -100,7 +102,7 @@ function statusOf(row: Row): QueryStatus {
   if (row.had_results == null) return 'unknown'
   if (row.model?.endsWith('-failed')) return 'failed'
   if (row.had_results === false) return 'empty'
-  if (row.top_similarity != null && row.top_similarity < THIN_THRESHOLD) return 'thin'
+  if (saidItCouldNotAnswer(row.answer_preview)) return 'thin'
   return 'answered'
 }
 
@@ -216,19 +218,20 @@ export async function GET(req: Request) {
       // for a null model, so a null-model row would silently vanish from both
       // lists while its badge still claimed a status.
       case 'thin':
-        // `.lt` already excludes nulls, so a row with no similarity recorded
-        // can't land here — only genuinely weak retrieval does.
-        steps.push(
-          ['eq', 'had_results', true],
-          ['lt', 'top_similarity', THIN_THRESHOLD],
-          ['not', 'model', 'like', '%-failed']
-        )
-        break
-      case 'answered':
         steps.push(
           ['eq', 'had_results', true],
           ['not', 'model', 'like', '%-failed'],
-          ['or', `top_similarity.gte.${THIN_THRESHOLD},top_similarity.is.null`]
+          ['or', unansweredOr]
+        )
+        break
+      case 'answered':
+        // The negation has to be one NOT ILIKE per pattern rather than a NOT
+        // wrapped around the OR: 'answered' is "matched none of them", and each
+        // step is ANDed, which is exactly that.
+        steps.push(
+          ['eq', 'had_results', true],
+          ['not', 'model', 'like', '%-failed'],
+          ...UNANSWERED_ILIKE.map(p => ['not', 'answer_preview', 'ilike', p] as FilterStep)
         )
         break
       default:
