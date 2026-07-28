@@ -186,6 +186,50 @@ function isStaleCalendarChunk(chunk: { url: string; title: string }, now: Date):
   return year < now.getFullYear() || (year === now.getFullYear() && month < now.getMonth())
 }
 
+/* Content the school has explicitly labelled for a previous school year.
+ *
+ * TCA's own site mixes years: the 2026-27 supply list PDFs are posted, but the
+ * grade-level pages still describe the 2025-26 ones, and the band supply list
+ * on the site is labelled 2023-24. Both end up in the corpus and nothing in a
+ * cosine score says which is current — so a parent asking what to buy could be
+ * handed last year's list.
+ *
+ * Only labels attached to a *deliverable* count. "Supply List 2025-26" is a
+ * stale answer; "the Healthy School Meals program began in the 2023-24 school
+ * year" is a true statement about the past and stays. That distinction is the
+ * whole point of the noun list below — a bare year-marker match would delete
+ * ordinary prose.
+ *
+ * The cutoff is derived from the current school year rather than hardcoded, so
+ * this ages forward on its own every August instead of needing a yearly edit.
+ */
+const DELIVERABLE =
+  String.raw`(?:supply list|calendar|dates|schedule|handbook|form|training|packet|menu|roster|fee list|reading list)`
+
+const DATED_DELIVERABLE = new RegExp(
+  // "Supply List 2025-26" / "2025-26 Music Dates" — the label rides with the thing.
+  String.raw`${DELIVERABLE}[^.\n]{0,80}?\b(20\d{2})-(\d{2})\b` +
+    '|' +
+    String.raw`\b(20\d{2})-(\d{2})\b[^.\n]{0,80}?${DELIVERABLE}` +
+    '|' +
+    // "School Year: 2025-26" as an explicit field label. Word order is what
+    // separates this from prose — a label puts the noun first ("School Year:
+    // 2025-26"), a sentence puts the year first ("began in the 2023-24 school
+    // year"), and only the former is a claim about what currently applies.
+    String.raw`school\s+year\W{0,6}\b(20\d{2})-(\d{2})\b`,
+  'i'
+)
+
+function isPriorSchoolYearChunk(chunk: { content?: string }, now: Date): boolean {
+  const content = chunk.content
+  if (!content) return false
+  const m = content.match(DATED_DELIVERABLE)
+  if (!m) return false
+  // Whichever alternation branch fired, the start year is the first defined group.
+  const startYear = Number(m[1] ?? m[3] ?? m[5])
+  return Number.isFinite(startYear) && startYear < schoolYearStart(now)
+}
+
 const CALENDAR_CAMPUS_MAP: Record<string, string> = {
   'east': 'east-elementary-calendar',
   'central': 'central-elementary-calendar',
@@ -500,7 +544,10 @@ export async function POST(req: NextRequest) {
   const merged: Chunk[] = [
     ...(chunks ?? []),
     ...keywordChunks.filter(c => !seenUrls.has(c.url)),
-  ].filter(c => !isStaleCalendarChunk(c, now))
+    // Applied here rather than at ingest so it covers what is already stored,
+    // and so the cutoff moves with the school year instead of being baked into
+    // whatever the corpus happened to look like on crawl day.
+  ].filter(c => !isStaleCalendarChunk(c, now) && !isPriorSchoolYearChunk(c, now))
 
   if (!merged?.length) {
     const noResultsAnswer = "I couldn't find information about that on the TCA website. Try rephrasing your question or visit tcatitans.org directly."
