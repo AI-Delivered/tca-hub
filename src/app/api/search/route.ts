@@ -87,6 +87,11 @@ const NON_NAME_RE = /\b(principal|teacher|teaches|counsel\w*|dean|nurse|secretar
 
 // Words that identify a campus rather than a role — they gate which staff cards
 // are eligible, so they must not also score them.
+// "what time does school start", "when does the day end", "bell schedule",
+// "school hours", "dismissal time".
+const BELL_SCHEDULE_RE =
+  /\b(bell schedule|school hours|what time (does|do)[^?]*\b(start|begin|end|get out|let out|dismiss)|when (does|do)[^?]*\b(day|school)\b[^?]*\b(start|begin|end)|dismissal|drop.?off time|start time|end time)\b/i
+
 const CAMPUS_WORDS = new Set(['east', 'central', 'north', 'elementary', 'junior', 'high', 'middle', 'jh', 'hs', 'cp', 'college', 'pathways', 'cottage', 'campus'])
 const STAFF_STOPWORDS = new Set([
   'who', 'is', 'are', 'the', 'a', 'an', 'at', 'for', 'of', 'in', 'to', 'my', 'me', 'i',
@@ -435,6 +440,31 @@ export async function POST(req: NextRequest) {
       ? await anchorQuery.ilike('content', `%${stem(roleAnchor)}%`).limit(4)
       : await anchorQuery.ilike('title', '%Leadership%').limit(2)
     keywordChunks = [...keywordChunks, ...(campusRows ?? []).map(c => ({ ...c, similarity: 0.7 }))]
+  }
+
+
+  /* "What time does school start / end" — anchored rather than left to the
+   * embedding.
+   *
+   * The high school bell schedule lives on the campus homepage, in a chunk that
+   * also carries the address, phone, fax and office hours. Against "what time
+   * does the high school day end" that chunk did not make the top 40 vector
+   * hits, while the answer — SEVENTH: 2:10pm - 3:00pm — sat inside it. The
+   * question is one of the most common a parent asks and the content is
+   * unmistakable, so it is matched on the words rather than the vector.
+   *
+   * Campus-scoped when the question names one. Without that, "what time does
+   * the high school day end" pulled College Pathways' schedule, which ends at a
+   * different time, and the answer alternated between 3:00 and 3:10 run to run.
+   */
+  if (BELL_SCHEDULE_RE.test(query)) {
+    const bellQuery = supabase
+      .from('page_chunks')
+      .select('url, title, content')
+      .ilike('content', '%BELL SCHEDULE%')
+    const scoped = wantCampus ? bellQuery.ilike('title', `%${wantCampus}%`) : bellQuery
+    const { data: bellRows } = await scoped.limit(4)
+    keywordChunks = [...keywordChunks, ...(bellRows ?? []).map(c => ({ ...c, similarity: 0.75 }))]
   }
 
   // Broad "days off" queries — pull monthly calendar chunks for the current school year.

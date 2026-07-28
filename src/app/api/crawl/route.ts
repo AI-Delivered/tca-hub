@@ -242,7 +242,35 @@ export async function GET(req: NextRequest) {
   // followed, and nothing counted it. See the stale sweep below for why that
   // silence was dangerous rather than merely untidy.
   let fetchFailures = 0
+  // Pages whose stored rows were removed because the page no longer has content
+  // of its own, and pages skipped as a duplicate of one already stored.
+  let emptied = 0
+  let duplicates = 0
+  /* Finalsite serves every page at two URLs — a friendly path and /fs/pages/<id>
+   * — and the crawler had no idea they were the same page. Half the bell
+   * schedule rows in the corpus were one page stored twice, which is wasted
+   * context: retrieval returns both, and they say the same thing. Keyed on the
+   * text itself, so it catches any aliasing the site does, not just this one.
+   */
+  const storedText = new Set<string>()
   let ranOutOfTime = false
+
+  /* What the corpus already holds, read once up front.
+   *
+   * Both cleanup paths below — a page that stopped qualifying, a page that
+   * turned out to be an alias — would otherwise issue a delete for every such
+   * page on every run, and almost all of those are no-ops against a URL that
+   * was never stored. That was 130 pointless round trips a run, which is what
+   * pushed the crawl back over its budget with 64 pages unreached.
+   */
+  const knownPages = new Set(
+    (await fetchAllUrls((from, to) =>
+      supabase.from('page_chunks').select('url')
+        .ilike('url', `${BASE}%`)
+        .not('url', 'ilike', '%staff-directory%')
+        .not('url', 'ilike', '%/fs/resource-manager/%')
+        .order('url').range(from, to))).map(u => u.split('#')[0])
+  )
 
   while (queue.length > 0 && visited.size < MAX_PAGES) {
     // Checked before a batch, not during: a batch that starts under the line
@@ -281,6 +309,24 @@ export async function GET(req: NextRequest) {
      */
     for (const res of results) if (res.r) res.r.text = pageBody(res.r.text)
     const toEmbed = results.filter(({ r }) => r && r.text.length >= 150)
+
+    /* A page that no longer qualifies has to have its old rows removed.
+     *
+     * Skipping it is not enough, and that is why stripping the site chrome
+     * appeared to work and didn't. Once the chrome came off, the High School
+     * Hours/Bell Schedule page was 58 characters of its own text and stopped
+     * qualifying — so the crawler skipped it, and the 322-character full-chrome
+     * row written before the change stayed exactly where it was. It then went
+     * on outranking the page that actually holds the schedule, because its
+     * title is nearly the question. Measured: it was the #1 hit for "what time
+     * does the high school day end", and the chunk with the times was not in
+     * the top 40.
+     */
+    const dropped = results.filter(({ url, r }) => r && r.text.length < 150 && knownPages.has(url))
+    for (const { url } of dropped) {
+      const { error } = await supabase.from('page_chunks').delete().eq('url', url)
+      if (!error) { emptied++; knownPages.delete(url) }
+    }
     if (!toEmbed.length) { skipped += batch.length; continue }
 
     try {
@@ -309,6 +355,18 @@ export async function GET(req: NextRequest) {
           rows.push({ url, title: r!.title, content, embedding, crawled_at: now })
         }
         if (!rows.length) continue
+
+        const fingerprint = r!.text.slice(0, 2000)
+        if (storedText.has(fingerprint)) {
+          duplicates++
+          // Drop any rows a previous run stored under this alias.
+          if (knownPages.has(url)) {
+            await supabase.from('page_chunks').delete().eq('url', url)
+            knownPages.delete(url)
+          }
+          continue
+        }
+        storedText.add(fingerprint)
 
         // Replace this page's rows, now that nothing was cleared up front.
         await supabase.from('page_chunks').delete().eq('url', url)
@@ -345,14 +403,6 @@ export async function GET(req: NextRequest) {
    * knows about. A thin run leaves the corpus alone and says why.
    */
   const failureRate = visited.size ? fetchFailures / visited.size : 1
-  const knownPages = new Set(
-    (await fetchAllUrls((from, to) =>
-      supabase.from('page_chunks').select('url')
-        .ilike('url', `${BASE}%`)
-        .not('url', 'ilike', '%staff-directory%')
-        .not('url', 'ilike', '%/fs/resource-manager/%')
-        .order('url').range(from, to))).map(u => u.split('#')[0])
-  )
   const coverage = knownPages.size ? visited.size / knownPages.size : 1
   const healthy = failureRate <= 0.1 && coverage >= 0.8
   const complete = !ranOutOfTime && notReached === 0 && visited.size < MAX_PAGES && healthy
@@ -380,6 +430,8 @@ export async function GET(req: NextRequest) {
     pagesNotReached: notReached,
     ranOutOfTime,
     fetchFailures,
+    emptiedPages: emptied,
+    duplicatePages: duplicates,
     // Why a run declined to sweep, when it did.
     sweptStalePages: complete,
     pageCoverage: Number(coverage.toFixed(2)),
