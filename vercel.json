@@ -8,6 +8,7 @@
     { "path": "/api/crawl/ingest-stats", "schedule": "0 7 * * *" },
     { "path": "/api/crawl/ingest-calendar", "schedule": "0 */4 * * *" },
     { "path": "/api/crawl/ingest-staff", "schedule": "0 2 * * 0" },
-    { "path": "/api/crawl/ingest-bound", "schedule": "0 8 * * *" }
+    { "path": "/api/crawl/ingest-bound", "schedule": "0 8 * * *" },
+    { "path": "/api/crawl/ingest-newsletters", "schedule": "0 13 * * 1,6" }
   ]
 }
