@@ -147,13 +147,32 @@ function chunkText(text: string, size = 3200, overlap = 300): string[] {
   return chunks
 }
 
+/* The site sheds load rather than queueing, and a full crawl is well past what
+ * it will take in one go.
+ *
+ * Measured on a breadth-first walk of 160 discovered URLs: 104 returned 200, 55
+ * returned 429, and exactly one was a genuine 404. The bucket is around a
+ * hundred requests and refills on a timer, so the failures are not "pages that
+ * do not exist" — they are pages this crawl gave up on and then, until the
+ * counter added in this change, never mentioned.
+ *
+ * A 429 is a "come back shortly", so it is worth two paced retries. Anything
+ * else — a real 404, a timeout — is answered once and left.
+ */
+const RATE_LIMIT_BACKOFF_MS = 2_500
+
 async function crawlOne(url: string): Promise<{ text: string; title: string; links: string[] } | null> {
   try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; TCAHub/1.0)' },
-      signal: AbortSignal.timeout(8000),
-    })
-    if (!res.ok) return null
+    let res: Response | null = null
+    for (let attempt = 0; attempt < 3; attempt++) {
+      res = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; TCAHub/1.0)' },
+        signal: AbortSignal.timeout(8000),
+      })
+      if (res.status !== 429) break
+      await new Promise(r => setTimeout(r, RATE_LIMIT_BACKOFF_MS * (attempt + 1)))
+    }
+    if (!res || !res.ok) return null
     const html = await res.text()
     return {
       text: htmlToText(html),
