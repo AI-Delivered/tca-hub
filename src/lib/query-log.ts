@@ -14,6 +14,7 @@
 // decision is remembered per process, so this costs one failed insert per cold
 // start at most, and zero once the migration is applied.
 
+import { after } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 export interface QueryLogRow {
@@ -64,9 +65,9 @@ function legacyShape(row: QueryLogRow) {
 }
 
 /**
- * Fire-and-forget insert into query_log. Never throws and never rejects — a
- * failed log must not take an answer down with it, and every call site is on
- * the response path.
+ * Insert into query_log without blocking the answer. Never throws and never
+ * rejects — a failed log must not take an answer down with it, and every call
+ * site is on the response path.
  */
 export function logQuery(supabase: SupabaseClient, row: QueryLogRow): void {
   // answer_preview predates `answer` and is what the analytics endpoint reads.
@@ -101,5 +102,26 @@ export function logQuery(supabase: SupabaseClient, row: QueryLogRow): void {
     console.error('query_log insert failed:', error.message)
   }
 
-  void write().catch(e => console.error('query_log insert threw:', e))
+  const run = () => write().catch(e => console.error('query_log insert threw:', e))
+
+  /* A bare `void write()` loses rows, silently.
+   *
+   * On serverless the instance is free to freeze the moment the response is
+   * finished, and a promise still in flight freezes with it — no error, no
+   * retry, just no row. Measured against production: ten requests, eight rows.
+   * The two that vanished returned 200 and a correct answer; only the record of
+   * them was missing, which is the worst way for this to fail because the
+   * dashboard cannot show a gap it doesn't know about. Repeating the same two
+   * questions logged all six times, so it is a race, not a bad query.
+   *
+   * `after` hands the work to the platform, which keeps the invocation alive
+   * until it finishes rather than racing the response.
+   */
+  try {
+    after(run)
+  } catch {
+    // `after` throws outside a request context — a script, a test. Nothing is
+    // about to freeze there, so the plain promise is the right behaviour.
+    void run()
+  }
 }
