@@ -570,9 +570,35 @@ export async function POST(req: NextRequest) {
   // Last year's calendar months are dropped here rather than at each fetch site,
   // so vector hits are covered too — they're the ones that surfaced October 2024
   // alongside October 2026 for the same question.
-  const seenUrls = new Set((chunks ?? []).map((c: Chunk) => c.url))
+  /* Vector hits far below the best one are noise, not context.
+   *
+   * match_chunks is asked for 16 and returns 16 whatever the scores look like,
+   * so a query with one strong match arrives with fifteen weak ones attached.
+   * "When is homecoming" is the clearest case: the right chunk ranks first at
+   * 0.380 and is followed by Cottage School Program, College Pathways March
+   * 2027 and a dozen more at ~0.30 — a 133-character answer inside an
+   * 8,625-character context that is almost entirely unrelated.
+   *
+   * Measured over ten representative questions, dropping anything more than
+   * 0.08 below the top hit removes 46% of chunks and 51% of context. Since
+   * input is 96% of what this app spends, that is most of a per-query bill.
+   *
+   * The floor of eight is what keeps this safe. "What are the supply lists"
+   * genuinely needs many sources — one per grade and campus — and a bare margin
+   * cut it to two. Keyword-anchored chunks are merged in afterwards and are
+   * never subject to this: those are deliberate retrievals, not vector guesses.
+   */
+  const MIN_VECTOR_CHUNKS = 8
+  const RELEVANCE_MARGIN = 0.08
+  const vectorHits = (chunks ?? []) as Chunk[]
+  const bestScore = vectorHits.length ? vectorHits[0].similarity : 0
+  const relevant = vectorHits.length <= MIN_VECTOR_CHUNKS
+    ? vectorHits
+    : vectorHits.filter((c, i) => i < MIN_VECTOR_CHUNKS || bestScore - c.similarity <= RELEVANCE_MARGIN)
+
+  const seenUrls = new Set(relevant.map((c: Chunk) => c.url))
   const merged: Chunk[] = [
-    ...(chunks ?? []),
+    ...relevant,
     ...keywordChunks.filter(c => !seenUrls.has(c.url)),
     // Applied here rather than at ingest so it covers what is already stored,
     // and so the cutoff moves with the school year instead of being baked into
