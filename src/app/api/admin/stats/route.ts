@@ -1,6 +1,15 @@
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { queryKey } from '@/lib/query-key'
 import { saidItCouldNotAnswer } from '@/lib/unanswered'
+
+interface FeedbackRow {
+  id: number
+  created_at: string
+  reason: string
+  query: string | null
+  answer: string | null
+  note: string | null
+}
 import { secretMatches } from '@/lib/auth'
 
 export const maxDuration = 30
@@ -440,11 +449,37 @@ export async function GET(req: Request) {
     })
   )
 
+  /* Reports from parents — the only signal here the app did not generate about
+   * itself.
+   *
+   * Everything else on this dashboard can see an answer that hedged or scored
+   * badly. None of it can see an answer that was confident and wrong, which is
+   * the failure that matters most and the one a person has to tell us about.
+   *
+   * Read tolerantly: the table arrives with migration 009, and the dashboard
+   * should not fail because that has not been pasted in yet.
+   */
+  let feedback: FeedbackRow[] = []
+  let feedbackTableMissing = false
+  {
+    const { data, error } = await supabase
+      .from('query_feedback')
+      .select('id, created_at, reason, query, answer, note')
+      .gte('created_at', since)
+      .order('created_at', { ascending: false })
+      .limit(50)
+    if (error) feedbackTableMissing = true
+    else feedback = (data ?? []) as unknown as FeedbackRow[]
+  }
+
   return Response.json({
     days,
     total,
     budget,
     sources,
+    feedback,
+    feedbackCount: feedback.length,
+    feedbackTableMissing,
     // Headline counts stay historical — they describe the window, not the to-do
     // list. The lists below are the to-do list, and drop anything since fixed.
     noResultCount: allNoResults.length,

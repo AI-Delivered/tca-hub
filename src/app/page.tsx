@@ -298,6 +298,136 @@ function CalendarPanel({ onClose }: { onClose: () => void }) {
   )
 }
 
+const REPORT_REASONS: { value: string; label: string }[] = [
+  { value: 'wrong', label: 'This answer is wrong' },
+  { value: 'incomplete', label: "It's missing something" },
+  { value: 'no-answer', label: "I didn't get an answer" },
+  { value: 'other', label: 'Something else' },
+]
+
+/** Tell us an answer was wrong. See /api/feedback for why this exists. */
+function ReportPanel({
+  query,
+  answer,
+  onClose,
+}: {
+  query: string
+  answer: string
+  onClose: () => void
+}) {
+  const ref = useDialog(onClose)
+  const titleId = useId()
+  const [reason, setReason] = useState('')
+  const [note, setNote] = useState('')
+  const [sent, setSent] = useState(false)
+
+  async function submit(value: string) {
+    setReason(value)
+    setSent(true)
+    // Fire and forget on purpose: the report is worth more than the
+    // confirmation, and a parent should never wait on our database.
+    void fetch('/api/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: value, query, answer, note }),
+    }).catch(() => { /* reported into the void rather than shown as an error */ })
+  }
+
+  return (
+    <div className="tca-scrim" data-align="bottom" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="tca-dialog" ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <div className="tca-dialog-head">
+          <h2 className="tca-dialog-title" id={titleId}>{sent ? 'Thank you' : 'Report an issue'}</h2>
+          <button className="tca-dialog-close" onClick={onClose} aria-label="Close" data-autofocus>
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <path d="M4.5 4.5l9 9M13.5 4.5l-9 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+
+        {sent ? (
+          <>
+            <p className="tca-dialog-sub">
+              That&rsquo;s been passed along — it helps more than you&rsquo;d think. Wrong answers are
+              the one problem this app can&rsquo;t spot on its own.
+            </p>
+            <button className="tca-btn-primary" style={{ marginTop: 14, width: '100%' }} onClick={onClose}>
+              Close
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="tca-dialog-sub" style={{ marginBottom: 14 }}>
+              What went wrong? No need to be precise — anything helps.
+            </p>
+            <label className="tca-sr-only" htmlFor={`${titleId}-note`}>Optional detail</label>
+            <textarea
+              id={`${titleId}-note`}
+              className="tca-report-note"
+              placeholder="Anything to add? (optional)"
+              value={note}
+              onChange={e => setNote(e.target.value.slice(0, 1000))}
+              rows={2}
+            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+              {REPORT_REASONS.map(r => (
+                <button
+                  key={r.value}
+                  className="tca-cal-btn"
+                  style={{ textAlign: 'left' }}
+                  aria-pressed={reason === r.value}
+                  onClick={() => void submit(r.value)}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** The add-to-home-screen tips, on demand rather than only on first visit. */
+function SavePhonePanel({ onClose }: { onClose: () => void }) {
+  const ref = useDialog(onClose)
+  const titleId = useId()
+  const isIos = typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent)
+
+  return (
+    <div className="tca-scrim" data-align="bottom" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="tca-dialog" ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <div className="tca-dialog-head">
+          <h2 className="tca-dialog-title" id={titleId}>Save to your phone</h2>
+          <button className="tca-dialog-close" onClick={onClose} aria-label="Close" data-autofocus>
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <path d="M4.5 4.5l9 9M13.5 4.5l-9 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+
+        <p className="tca-dialog-sub" style={{ marginBottom: 14 }}>
+          It opens like an app, full screen, with no address bar.
+        </p>
+
+        <ol className="tca-steps">
+          <li>Tap <strong>Share</strong>{isIos ? ' at the bottom of the screen' : ' in your browser toolbar'}.</li>
+          <li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>
+          <li>Tap <strong>Add</strong>.</li>
+        </ol>
+
+        {!isIos && (
+          <p className="tca-dialog-sub" style={{ marginTop: 12 }}>
+            On Android the same option is under your browser&rsquo;s menu, usually called{' '}
+            <strong>Add to Home screen</strong> or <strong>Install app</strong>.
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function AddToHomePrompt() {
   const [visible, setVisible] = useState(false)
 
@@ -393,12 +523,14 @@ function AnswerCard({
   isStreaming = false,
   onClarify,
   onFollowUp,
+  onReport,
 }: {
   answer: string
   sources: Source[]
   isStreaming?: boolean
   onClarify?: (campus?: string, grade?: string) => void
   onFollowUp?: (opt: string) => void
+  onReport?: () => void
 }) {
   // Parsing markdown is not free, and this used to run on every streamed token —
   // a full re-parse and re-sanitise of the whole answer, dozens of times a
@@ -492,6 +624,13 @@ function AnswerCard({
       )}
 
       <SourcesPanel sources={sources} />
+      {/* Only once the answer has finished — offering to report a sentence that
+          is still being written reads as the app doubting itself mid-thought. */}
+      {onReport && !isStreaming && (
+        <button className="tca-report-link" onClick={onReport}>
+          Report an issue with this answer
+        </button>
+      )}
     </div>
   )
 }
@@ -509,6 +648,10 @@ export default function Home() {
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [dismissedCompletion, setDismissedCompletion] = useState('')
   const [showCalendars, setShowCalendars] = useState(false)
+  const [showSavePhone, setShowSavePhone] = useState(false)
+  // What the report sheet is about. Carries the answer so the report is
+  // readable later without having to reconstruct which reply it referred to.
+  const [reportTarget, setReportTarget] = useState<{ query: string; answer: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [lastQuery, setLastQuery] = useState('')
   const abortRef = useRef<AbortController | null>(null)
@@ -749,7 +892,19 @@ export default function Home() {
       <main className="tca-main" data-conversation={hasConversation}>
         <div className="tca-hero tca-column">
           <div>
-            <h1 className="tca-wordmark">tca<b>hub</b></h1>
+            <div className="tca-wordmark-row">
+              <h1 className="tca-wordmark">tca<b>hub</b></h1>
+              {/* Not decoration: this app answers from a corpus that is still
+                  being corrected, and a parent should know that before acting
+                  on a bell time.
+
+                  In its own flex cell, balanced by an equal empty cell on the
+                  left, so the wordmark stays centred on the tagline beneath it
+                  rather than being shoved left by the tag's width. */}
+              <span className="tca-beta-cell">
+                <span className="tca-beta">Beta</span>
+              </span>
+            </div>
             {!hasConversation && (
               <>
                 <p className="tca-tagline" style={{ marginTop: 6 }}>
@@ -891,6 +1046,12 @@ export default function Home() {
                 Try again
               </button>
             )}
+            <button
+              className="tca-report-link"
+              onClick={() => setReportTarget({ query: lastQuery, answer: '' })}
+            >
+              Report this
+            </button>
           </div>
         )}
 
@@ -917,6 +1078,7 @@ export default function Home() {
                     sources={ex.sources}
                     onClarify={isNewest ? (campus, grade) => handleClarification(ex.query, campus, grade) : undefined}
                     onFollowUp={isNewest ? opt => void runSearch(`${ex.query} at ${opt}`) : undefined}
+                    onReport={() => setReportTarget({ query: ex.query, answer: ex.answer })}
                   />
                 </div>
               )
@@ -926,9 +1088,20 @@ export default function Home() {
       </main>
 
       {showCalendars && <CalendarPanel onClose={() => setShowCalendars(false)} />}
+      {showSavePhone && <SavePhonePanel onClose={() => setShowSavePhone(false)} />}
+      {reportTarget && (
+        <ReportPanel
+          query={reportTarget.query}
+          answer={reportTarget.answer}
+          onClose={() => setReportTarget(null)}
+        />
+      )}
       <AddToHomePrompt />
 
       <footer className="tca-footer">
+        <button className="tca-footer-btn" onClick={() => setShowSavePhone(true)}>
+          Save to iPhone
+        </button>
         <p>The Classical Academy · Colorado Springs, Colorado</p>
       </footer>
     </div>

@@ -36,6 +36,9 @@ interface Stats {
   noResultQueries: { query: string; created_at: string }[]
   thinQueries: { query: string; similarity: number | null; created_at: string; answer: string | null }[]
   contentGaps: { key: string; label: string; ingestRoute: string; count: number; samples: string[] }[]
+  feedback: { id: number; created_at: string; reason: string; query: string | null; answer: string | null; note: string | null }[]
+  feedbackCount: number
+  feedbackTableMissing: boolean
   cost: {
     totalInputTokens: number
     totalOutputTokens: number
@@ -188,6 +191,13 @@ function CopyPromptButton({ prompt, label = 'Copy fix prompt' }: { prompt: strin
       {copied ? 'Copied ✓' : label}
     </button>
   )
+}
+
+const REPORT_LABELS: Record<string, string> = {
+  wrong: 'Wrong answer',
+  incomplete: 'Missing something',
+  'no-answer': 'No answer',
+  other: 'Something else',
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -1158,6 +1168,53 @@ export default function AdminDashboard() {
             </Section>
 
             <UsagePanel usage={usage} internalCost={stats.cost.totalCost} />
+
+            {/* Ahead of the measured sections on purpose: a parent taking the
+                trouble to report something outranks anything the app inferred
+                about itself. */}
+            <Section title={`Reported by parents${stats.feedbackCount ? ` — ${stats.feedbackCount}` : ''}`}>
+              {stats.feedbackTableMissing ? (
+                <p className="nerd-empty">
+                  Reports are being accepted but not stored — apply{' '}
+                  <code className="nerd-code">supabase/migrations/009_query_feedback.sql</code>.
+                </p>
+              ) : stats.feedback.length === 0 ? (
+                <p className="nerd-empty">Nothing reported in this window.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {stats.feedback.map(f => (
+                    <div key={f.id} className="nerd-gap">
+                      <div className="nerd-gap-head">
+                        <div style={{ fontSize: 14, fontWeight: 600 }}>
+                          <span style={{ color: f.reason === 'wrong' ? '#ff6b6b' : '#e0b341' }}>
+                            {REPORT_LABELS[f.reason] ?? f.reason}
+                          </span>
+                          {f.query ? <> · &ldquo;{f.query}&rdquo;</> : null}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span className="nerd-card-sub">{new Date(f.created_at).toLocaleString()}</span>
+                          {f.query && (
+                            <button className="nerd-btn" onClick={() => showInLog({ status: 'all', q: f.query ?? '' })}>
+                              Find in log ↓
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {f.note && (
+                        <p className="nerd-card-sub" style={{ marginTop: 8, color: '#e6e6e6' }}>
+                          &ldquo;{f.note}&rdquo;
+                        </p>
+                      )}
+                      {f.answer && (
+                        <p className="nerd-card-sub" style={{ marginTop: 6 }}>
+                          What it said: {f.answer.slice(0, 240)}{f.answer.length > 240 ? '…' : ''}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
 
             <Section title="Content gaps — where to re-scrape">
               {stats.resolvedCount > 0 && (

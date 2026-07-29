@@ -1907,3 +1907,113 @@ body {
   overflow: hidden;
 }
 .nerd-meter span { display: block; height: 100%; border-radius: 100px; background: var(--nerd-info); }
+
+/* ── Beta tag, save-to-phone, and issue reporting ─────────────────────── */
+
+/* The wordmark is the logo and belongs centred on the tagline below it; the
+   tag is an annotation hanging off it. A plain flex row broke both — it fills
+   the width and packs to the left, so the wordmark sat 83px left of centre —
+   and simply centring the row would still push the wordmark left by half the
+   tag's width. Equal flex cells either side keep the wordmark exactly centred
+   whatever the tag says, and they shrink rather than clip on a narrow phone. */
+.tca-wordmark-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.tca-wordmark-row::before {
+  content: '';
+  flex: 1 1 0;
+}
+
+.tca-beta-cell {
+  flex: 1 1 0;
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+/* Aligned to the wordmark's cap height rather than its box: the wordmark is
+   display-sized and clamps with the viewport, so a vertically centred pill
+   drifts low against the lowercase letters as the screen widens. */
+.tca-beta {
+  align-self: center;
+  margin-top: 0.28em;
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+
+.tca-footer-btn {
+  display: inline-block;
+  margin-bottom: 10px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tca-footer-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.tca-steps {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.tca-steps strong { color: var(--text-primary); }
+
+/* Deliberately quiet. This sits under every answer, and an eye-catching
+   "something wrong?" button under a correct answer invites doubt rather than
+   reports. It should be findable when a parent is already unhappy, not before. */
+.tca-report-link {
+  align-self: flex-start;
+  margin-top: 10px;
+  padding: 4px 0;
+  background: none;
+  border: none;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.tca-report-link:hover { color: var(--text-primary); }
+
+.tca-report-note {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.tca-report-note:focus {
+  outline: none;
+  border-color: var(--border-strong);
+}
