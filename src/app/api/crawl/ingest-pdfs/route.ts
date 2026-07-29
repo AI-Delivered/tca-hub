@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { sanitizeForPostgres } from '@/lib/ingest-chunks'
 import { fetchAllUrls } from '@/lib/page-urls'
+import { withIngestLog } from '@/lib/ingest-log'
 
 export const maxDuration = 300
 
@@ -381,7 +382,7 @@ async function discover(pages: string[], indexed: Set<string>, deadline: number)
   return { wanted, excluded, queue, scanned, fetched, failed, rateLimited, stoppedEarly }
 }
 
-export async function POST(req: NextRequest) {
+async function run(req: NextRequest) {
   if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const startedAt = Date.now()
@@ -688,5 +689,12 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  return POST(req)
+  return handler(req)
 }
+
+/** Every invocation is recorded so the dashboard can report what changed. */
+function handler(req: NextRequest) {
+  return withIngestLog(req, '/api/crawl/ingest-pdfs', () => run(req))
+}
+
+export const POST = handler

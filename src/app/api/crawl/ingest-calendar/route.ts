@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { storeChunks } from '@/lib/ingest-chunks'
+import { withIngestLog } from '@/lib/ingest-log'
 
 export const maxDuration = 300
 
@@ -92,7 +93,7 @@ function addDays(dateStr: string, days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
-export async function GET(req: NextRequest) {
+async function run(req: NextRequest) {
   if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { VoyageAIClient } = await import('voyageai')
@@ -212,3 +213,10 @@ export async function GET(req: NextRequest) {
     failedSports,
   })
 }
+
+/** Every invocation is recorded so the dashboard can report what changed. */
+function handler(req: NextRequest) {
+  return withIngestLog(req, '/api/crawl/ingest-calendar', () => run(req))
+}
+
+export const GET = handler

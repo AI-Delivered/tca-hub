@@ -2,6 +2,17 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { queryKey } from '@/lib/query-key'
 import { saidItCouldNotAnswer } from '@/lib/unanswered'
 
+interface IngestRunRow {
+  id: number
+  ran_at: string
+  route: string
+  trigger: string
+  duration_ms: number | null
+  items: number | null
+  errors: number | null
+  summary: Record<string, unknown> | null
+}
+
 interface FeedbackRow {
   id: number
   created_at: string
@@ -468,6 +479,25 @@ export async function GET(req: Request) {
    * Read tolerantly: the table arrives with migration 009, and the dashboard
    * should not fail because that has not been pasted in yet.
    */
+  /* What the ingest routes have been doing.
+   *
+   * Each route already computed this and threw it away; migration 010 keeps a
+   * copy. Read tolerantly for the same reason as feedback — the dashboard must
+   * not fail because a migration has not been pasted in.
+   */
+  let ingestRuns: IngestRunRow[] = []
+  let ingestRunsTableMissing = false
+  {
+    const { data, error } = await supabase
+      .from('ingest_runs')
+      .select('id, ran_at, route, trigger, duration_ms, items, errors, summary')
+      .gte('ran_at', since)
+      .order('ran_at', { ascending: false })
+      .limit(60)
+    if (error) ingestRunsTableMissing = true
+    else ingestRuns = (data ?? []) as unknown as IngestRunRow[]
+  }
+
   let feedback: FeedbackRow[] = []
   let feedbackTableMissing = false
   {
@@ -489,6 +519,8 @@ export async function GET(req: Request) {
     feedback,
     feedbackCount: feedback.length,
     feedbackTableMissing,
+    ingestRuns,
+    ingestRunsTableMissing,
     // Headline counts stay historical — they describe the window, not the to-do
     // list. The lists below are the to-do list, and drop anything since fixed.
     noResultCount: allNoResults.length,

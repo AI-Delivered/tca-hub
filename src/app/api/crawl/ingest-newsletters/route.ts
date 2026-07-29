@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { storeChunks, sanitizeForPostgres } from '@/lib/ingest-chunks'
+import { withIngestLog } from '@/lib/ingest-log'
 
 export const maxDuration = 300
 
@@ -159,7 +160,7 @@ function detectGrade(label: string): string | null {
   return hit ? hit.replace(/\s+/g, '-') : null
 }
 
-export async function POST(req: NextRequest) {
+async function run(req: NextRequest) {
   if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { searchParams } = new URL(req.url)
@@ -259,5 +260,12 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  return POST(req)
+  return handler(req)
 }
+
+/** Every invocation is recorded so the dashboard can report what changed. */
+function handler(req: NextRequest) {
+  return withIngestLog(req, '/api/crawl/ingest-newsletters', () => run(req))
+}
+
+export const POST = handler

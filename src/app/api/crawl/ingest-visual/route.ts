@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { pageBody } from '@/lib/page-body'
+import { withIngestLog } from '@/lib/ingest-log'
 
 export const maxDuration = 300
 
@@ -123,7 +124,7 @@ async function extractPage(
   return text
 }
 
-export async function POST(req: NextRequest) {
+async function run(req: NextRequest) {
   if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { VoyageAIClient } = await import('voyageai')
@@ -190,5 +191,12 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  return POST(req)
+  return handler(req)
 }
+
+/** Every invocation is recorded so the dashboard can report what changed. */
+function handler(req: NextRequest) {
+  return withIngestLog(req, '/api/crawl/ingest-visual', () => run(req))
+}
+
+export const POST = handler

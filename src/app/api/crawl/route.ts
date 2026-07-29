@@ -4,6 +4,7 @@ import { isCrawlAuthorized } from '@/lib/auth'
 import { fetchAllUrls } from '@/lib/page-urls'
 import { pageBody } from '@/lib/page-body'
 import { qualifiedTitle } from '@/lib/page-title'
+import { withIngestLog } from '@/lib/ingest-log'
 
 export const maxDuration = 300
 
@@ -186,7 +187,7 @@ async function crawlOne(url: string): Promise<{ text: string; title: string; lin
   }
 }
 
-export async function GET(req: NextRequest) {
+async function run(req: NextRequest) {
   if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const startedAt = Date.now()
@@ -492,5 +493,12 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  return GET(req)
+  return handler(req)
 }
+
+/** Every invocation is recorded so the dashboard can report what changed. */
+function handler(req: NextRequest) {
+  return withIngestLog(req, '/api/crawl', () => run(req))
+}
+
+export const GET = handler

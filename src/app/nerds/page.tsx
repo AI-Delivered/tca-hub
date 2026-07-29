@@ -37,6 +37,8 @@ interface Stats {
   thinQueries: { query: string; similarity: number | null; created_at: string; answer: string | null }[]
   contentGaps: { key: string; label: string; ingestRoute: string; count: number; samples: string[] }[]
   feedback: { id: number; created_at: string; reason: string; query: string | null; answer: string | null; note: string | null }[]
+  ingestRuns: { id: number; ran_at: string; route: string; trigger: string; duration_ms: number | null; items: number | null; errors: number | null; summary: Record<string, unknown> | null }[]
+  ingestRunsTableMissing: boolean
   feedbackCount: number
   feedbackTableMissing: boolean
   cost: {
@@ -191,6 +193,28 @@ function CopyPromptButton({ prompt, label = 'Copy fix prompt' }: { prompt: strin
       {copied ? 'Copied ✓' : label}
     </button>
   )
+}
+
+/** Numbers worth putting on the row itself, in the order they read best. */
+const RUN_FIELDS = [
+  'pagesVisited', 'pagesFetched', 'unchangedPages', 'duplicatePages', 'emptiedPages',
+  'stalePagesRemoved', 'processed', 'queued', 'chunksIndexed', 'chunksInserted',
+  'indexed', 'skipped', 'errors', 'fetchFailures', 'incompleteCount', 'deferredAsTooLargeCount',
+]
+
+function runDetail(summary: Record<string, unknown> | null): string {
+  if (!summary) return ''
+  return RUN_FIELDS
+    .filter(k => typeof summary[k] === 'number' && (summary[k] as number) !== 0)
+    .map(k => `${k.replace(/([A-Z])/g, ' $1').toLowerCase()} ${summary[k]}`)
+    .join(' · ')
+}
+
+function ago(iso: string): string {
+  const h = (Date.now() - Date.parse(iso)) / 36e5
+  if (h < 1) return `${Math.round(h * 60)}m ago`
+  if (h < 48) return `${Math.round(h)}h ago`
+  return `${Math.round(h / 24)}d ago`
 }
 
 const REPORT_LABELS: Record<string, string> = {
@@ -1168,6 +1192,42 @@ export default function AdminDashboard() {
             </Section>
 
             <UsagePanel usage={usage} internalCost={stats.cost.totalCost} />
+
+            <Section title="What the ingest jobs did">
+              {stats.ingestRunsTableMissing ? (
+                <p className="nerd-empty">
+                  Runs are not being recorded — apply{' '}
+                  <code className="nerd-code">supabase/migrations/010_ingest_runs.sql</code>.
+                </p>
+              ) : stats.ingestRuns.length === 0 ? (
+                <p className="nerd-empty">
+                  No ingest run recorded in this window. If that covers a scheduled slot, the crons are not firing.
+                </p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {stats.ingestRuns.map(r => (
+                    <div key={r.id} className="nerd-gap">
+                      <div className="nerd-gap-head">
+                        <div style={{ fontSize: 13.5, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <code className="nerd-code">{r.route}</code>
+                          {/* A hand-run must not read as a healthy schedule. */}
+                          <span style={{ color: r.trigger === 'cron' ? '#5ee6a0' : '#8b93a7', fontWeight: 500, fontSize: 12 }}>
+                            {r.trigger}
+                          </span>
+                          {r.errors ? <span style={{ color: '#ff6b6b', fontSize: 12 }}>{r.errors} error{r.errors === 1 ? '' : 's'}</span> : null}
+                        </div>
+                        <span className="nerd-card-sub">
+                          {ago(r.ran_at)}{r.duration_ms != null ? ` · ${Math.round(r.duration_ms / 1000)}s` : ''}
+                        </span>
+                      </div>
+                      <div className="nerd-card-sub" style={{ marginTop: 6 }}>
+                        {runDetail(r.summary) || 'nothing changed'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
 
             {/* Ahead of the measured sections on purpose: a parent taking the
                 trouble to report something outranks anything the app inferred

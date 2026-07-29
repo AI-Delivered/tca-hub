@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
+import { withIngestLog } from '@/lib/ingest-log'
 
 export const maxDuration = 60
 
@@ -27,7 +28,7 @@ const TCA_SPORTS = [
   'Tennis',
 ]
 
-export async function GET(req: NextRequest) {
+async function run(req: NextRequest) {
   if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { VoyageAIClient } = await import('voyageai')
@@ -50,3 +51,10 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({ ok: !error, error: error?.message })
 }
+
+/** Every invocation is recorded so the dashboard can report what changed. */
+function handler(req: NextRequest) {
+  return withIngestLog(req, '/api/crawl/ingest-bound', () => run(req))
+}
+
+export const GET = handler

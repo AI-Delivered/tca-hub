@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { storeChunks } from '@/lib/ingest-chunks'
+import { withIngestLog } from '@/lib/ingest-log'
 
 export const maxDuration = 300
 
@@ -96,7 +97,7 @@ function extractFromHtml(html: string): { staff: StaffMember[]; groupIds: string
   return { staff, groupIds, totalPages }
 }
 
-export async function GET(req: NextRequest) {
+async function run(req: NextRequest) {
   if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const campusFilter = req.nextUrl.searchParams.get('campus')
@@ -225,3 +226,10 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({ results })
 }
+
+/** Every invocation is recorded so the dashboard can report what changed. */
+function handler(req: NextRequest) {
+  return withIngestLog(req, '/api/crawl/ingest-staff', () => run(req))
+}
+
+export const GET = handler
