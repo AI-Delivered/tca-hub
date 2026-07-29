@@ -121,9 +121,18 @@ function categorize(query: string) {
  * `maxAgeHours` is what "fresh" means for each source, derived from its cron in
  * vercel.json plus room for one missed run. */
 const SOURCES: { key: string; label: string; pattern: string; maxAgeHours: number; note: string }[] = [
-  { key: 'athletics', label: 'Athletics schedule (GoBound)', pattern: '%gobound%', maxAgeHours: 12, note: 'ingest-calendar every 4h, ingest-bound daily' },
-  { key: 'teamreach', label: 'Team feeds (TeamReach)', pattern: '%teamreach%', maxAgeHours: 12, note: 'ingest-ical every 6h — the only source of practice times' },
-  { key: 'calendars', label: 'School calendars', pattern: '%-calendar%', maxAgeHours: 12, note: 'ingest-ical every 6h' },
+  /* 30 hours, not 12, and the reason is a platform limit rather than a
+   * preference. Vercel's Hobby plan runs cron jobs at most once a day and
+   * triggers them anywhere inside their scheduled hour, so the honest worst
+   * case between two daily runs is about 26 hours. A 12-hour threshold against
+   * a daily job is an alarm that is always red, which is the same as no alarm.
+   *
+   * This panel earned its keep before the change: it was the only thing that
+   * noticed the crons had stopped firing entirely. Nothing else would have —
+   * the app kept answering, just from day-old schedules. */
+  { key: 'athletics', label: 'Athletics schedule (GoBound)', pattern: '%gobound%', maxAgeHours: 30, note: 'ingest-calendar and ingest-bound, daily' },
+  { key: 'teamreach', label: 'Team feeds (TeamReach)', pattern: '%teamreach%', maxAgeHours: 30, note: 'ingest-ical daily — the only source of practice times' },
+  { key: 'calendars', label: 'School calendars', pattern: '%-calendar%', maxAgeHours: 30, note: 'ingest-ical daily' },
   { key: 'staff', label: 'Staff directories', pattern: '%staff-directory%', maxAgeHours: 24 * 8, note: 'ingest-staff weekly' },
   { key: 'documents', label: 'Documents & PDFs', pattern: '%resource-manager%', maxAgeHours: 24 * 8, note: 'ingest-pdfs weekly' },
   { key: 'documents_cdn', label: 'Documents (Finalsite CDN)', pattern: '%finalsite.net%', maxAgeHours: 24 * 8, note: 'ingest-pdfs weekly' },
