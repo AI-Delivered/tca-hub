@@ -628,7 +628,7 @@ function AnswerCard({
           is still being written reads as the app doubting itself mid-thought. */}
       {onReport && !isStreaming && (
         <button className="tca-report-link" onClick={onReport}>
-          Report an issue with this answer
+          Report an issue
         </button>
       )}
     </div>

@@ -1982,23 +1982,41 @@ body {
 
 .tca-steps strong { color: var(--text-primary); }
 
-/* Deliberately quiet. This sits under every answer, and an eye-catching
-   "something wrong?" button under a correct answer invites doubt rather than
-   reports. It should be findable when a parent is already unhappy, not before. */
+/* Deliberately quiet, and quieter still after seeing it on a phone.
+ *
+ * Two things were wrong. The answer card has no padding of its own — every
+ * child carries its own var(--space-5) — so a button without any sat flush
+ * against the card's left edge, 46px out of line with both the answer text and
+ * the source titles, reading as a fifth source row that had broken. And an
+ * underlined full sentence is a lot of emphasis to put under an answer that is
+ * almost always correct; it invites doubt rather than reports.
+ *
+ * Now it shares the sources strip's sunken background and sits right-aligned in
+ * the corner, dim and underline-free until hovered — findable when a parent is
+ * already unhappy, invisible when they are not.
+ */
 .tca-report-link {
-  align-self: flex-start;
-  margin-top: 10px;
-  padding: 4px 0;
-  background: none;
+  display: block;
+  width: 100%;
+  padding: 9px var(--space-5) 11px;
   border: none;
-  color: var(--text-tertiary, var(--text-secondary));
-  font-size: 12px;
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  border-top: 1px solid var(--answer-border);
+  background: var(--answer-bg-sunken);
+  color: var(--answer-dim);
+  font-size: 11.5px;
+  text-align: right;
+  text-decoration: none;
+  opacity: 0.65;
   cursor: pointer;
+  transition: opacity var(--fast) var(--ease);
 }
 
-.tca-report-link:hover { color: var(--text-primary); }
+.tca-report-link:hover,
+.tca-report-link:focus-visible {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 
 .tca-report-note {
   width: 100%;
