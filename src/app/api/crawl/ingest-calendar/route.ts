@@ -10,7 +10,23 @@ const BASE = 'https://gobound.com'
 const SCHOOL = 'theclassahs'
 const CHUNK_URL = `${BASE}/co/schools/${SCHOOL}/calendar`
 
-const PAGES = 3 // ~90 days ahead in 30-day windows
+/* GoBound's list view returns roughly the next ten days of events from the
+ * date it is given, not thirty. This fetched three pages stepped a month apart
+ * and assumed each covered the gap, so it captured three narrow windows and
+ * dropped everything between them — about two thirds of the calendar.
+ *
+ * Measured against the live source: the page dated 2026-07-31 ends at 08-10,
+ * the one dated 08-30 ends at 09-04, the one dated 09-29 ends at 10-08. The
+ * Homecoming Dance on 09-26 fell in a gap and was in none of them, while the
+ * page dated 09-20 has it. That is why "when is homecoming" stopped answering
+ * even though GoBound had it all along.
+ *
+ * Stepping by a week with overlapping windows covers the same horizon without
+ * gaps. Events are deduplicated below, so the overlap costs nothing but a few
+ * parallel fetches.
+ */
+const PAGE_STEP_DAYS = 7
+const PAGES = 18 // ~18 weeks ahead, in overlapping ~10-day windows
 
 async function fetchCalendarPage(date: string): Promise<string> {
   const url = `${BASE}/co/schools/${SCHOOL}/calendar?includePractices=true&v=list&date=${date}`
@@ -108,7 +124,7 @@ async function run(req: NextRequest) {
   // Nothing is removed now until replacement events are in hand.
 
   const pages = await Promise.allSettled(
-    Array.from({ length: PAGES }, (_, i) => fetchCalendarPage(addDays(today, i * 30)))
+    Array.from({ length: PAGES }, (_, i) => fetchCalendarPage(addDays(today, i * PAGE_STEP_DAYS)))
   )
 
   const allEvents: CalendarEvent[] = []
