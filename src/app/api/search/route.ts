@@ -467,6 +467,48 @@ export async function POST(req: NextRequest) {
     keywordChunks = [...keywordChunks, ...(bellRows ?? []).map(c => ({ ...c, similarity: 0.75 }))]
   }
 
+
+  /* Named school events — homecoming, spirit week, picture day, grandparents' day.
+   *
+   * These lose to the embedding twice over. A named event is usually one line
+   * inside a long schedule chunk, so its signal is diluted to nothing, and any
+   * chunk actually titled for it wins outright and hides the rest. Asked "when
+   * is homecoming", retrieval returned the Homecoming Dance chunk at 0.379 and
+   * put the football schedule carrying "TCA vs D'Evelyn: HOMECOMING" at #30 and
+   * #38 — outside the sixteen the RPC returns, so the game never reached the
+   * model at all and the answer named only the dance.
+   *
+   * Homecoming is a game on Friday and a dance on Saturday. Answering one and
+   * omitting the other is how a parent misses the game.
+   *
+   * Matched on content across the event sources, so an event mentioned inside a
+   * schedule is found the same way one with its own chunk is.
+   */
+  const eventTerms = query
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(t => t.length >= 5 && !STAFF_STOPWORDS.has(t) && !CAMPUS_WORDS.has(t))
+  if (eventTerms.length) {
+    const eventRows = await Promise.all(
+      eventTerms.slice(0, 2).map(term =>
+        supabase
+          .from('page_chunks')
+          .select('url, title, content')
+          // Every source that carries dated events. TeamReach belongs here and
+          // was the omission that kept this from working: the homecoming
+          // football game lives only in the coaches' own feed.
+          .or('url.ilike.%gobound%,url.ilike.%teamreach%,url.ilike.%-calendar%,url.ilike.%tcatitans.org/calendar%')
+          .ilike('content', `%${term}%`)
+          .limit(8)
+          .then(r => r.data ?? [])
+      )
+    )
+    // Below the athletics anchor's 0.90 — these are a widening of the net, not
+    // a statement that this is the answer.
+    keywordChunks = [...keywordChunks, ...eventRows.flat().map(c => ({ ...c, similarity: 0.68 }))]
+  }
+
   // Broad "days off" queries — pull monthly calendar chunks for the current school year.
   // Only include months from the current month onward so the AI isn't confused by past events.
   const daysOffQuery = DAYS_OFF_RE.test(query) && !CARPOOL_RE.test(query)
@@ -974,6 +1016,7 @@ Sports schedule accuracy rule: The schedule data comes from two sources — GoBo
 Answer style:
 - Lead with the answer. No preamble ("Based on...", "According to...").
 - **NEVER end with a question of any kind. The HARD RULE above is absolute — it overrides everything else. When in doubt: answer, then stop.**
+- When one word in the question names more than one distinct event, give every one of them with its own date — never pick the one you happened to retrieve first. "Homecoming" is a football game on one night and a dance on another; spirit week is a week of separate events; picture day differs per campus. Answer "the homecoming game is Friday the 25th, the dance is Saturday the 26th", not one of the two as though the other did not exist. A parent who asks about homecoming and is told only about the dance will miss the game.
 - When a question could apply to multiple campuses or grade levels with no prior context, list the answer for each one briefly — do not ask which campus. E.g. "School ends at 3:30 PM at all three elementaries (Mon–Thu), 3:00 PM at JH, and 3:10 PM at HS." Asking is never the right move.
 - 1–4 sentences for most things. Bullet points only for 3+ distinct items.
 - Be direct and specific — "9th graders start on..." or "TCA football opens on..." rather than vague generalizations.
