@@ -11,6 +11,7 @@
 
 import { NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { secretMatches } from '@/lib/auth'
 
 // Set on the first insert of the process. The table arrives with migration 010,
 // and until it is applied every insert is rejected — which must not turn a
@@ -23,9 +24,26 @@ function missingTable(error: { code?: string; message?: string } | null): boolea
   return /relation .* does not exist|could not find the table/i.test(error.message ?? '')
 }
 
-/** Vercel sets this header on scheduled invocations; anything else is by hand. */
+/* How this run was invoked.
+ *
+ * This checked for the `x-vercel-cron: 1` header, and got it exactly backwards.
+ * Once CRON_SECRET is set, Vercel authenticates a scheduled run with
+ * `Authorization: Bearer $CRON_SECRET` and does not send that header — so every
+ * real cron run was recorded as "manual", while the only row ever labelled
+ * "cron" was a request I sent by hand with the header spoofed to prove the
+ * routes were unauthenticated. The label meant precisely the opposite of what
+ * it claimed, on the one distinction the panel exists to draw.
+ *
+ * The bearer secret is what actually identifies Vercel's scheduler now, so that
+ * is what this reads. The header is kept as a fallback for the case the secret
+ * is unset, where it is the only signal available — and where, as established,
+ * it proves nothing.
+ */
 function triggerOf(req: Request): string {
-  return req.headers.get('x-vercel-cron') === '1' ? 'cron' : 'manual'
+  const bearer = req.headers.get('authorization')?.replace(/^Bearer /i, '')
+  if (secretMatches(bearer, process.env.CRON_SECRET)) return 'cron'
+  if (!process.env.CRON_SECRET && req.headers.get('x-vercel-cron') === '1') return 'cron'
+  return 'manual'
 }
 
 /**
