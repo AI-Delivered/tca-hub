@@ -1,6 +1,7 @@
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { queryKey } from '@/lib/query-key'
 import { saidItCouldNotAnswer } from '@/lib/unanswered'
+import { fetchAllUrls } from '@/lib/page-urls'
 
 interface IngestRunRow {
   id: number
@@ -485,6 +486,35 @@ export async function GET(req: Request) {
    * copy. Read tolerantly for the same reason as feedback — the dashboard must
    * not fail because a migration has not been pasted in.
    */
+  /* What the corpus actually holds, by kind.
+   *
+   * The freshness panel says whether each source ran recently and the run log
+   * says what each run changed, but neither answers "what does this app
+   * actually know about". Counted from page_chunks rather than tracked, so it
+   * cannot drift from the truth.
+   */
+  const inventoryUrls = await fetchAllUrls((from, to) =>
+    supabase.from('page_chunks').select('url').order('url').range(from, to))
+  const inventoryPages = new Set(inventoryUrls.map(u => u.split('#')[0]))
+  const countWhere = (test: (u: string) => boolean) => {
+    let chunks = 0
+    const items = new Set<string>()
+    for (const u of inventoryUrls) {
+      if (!test(u)) continue
+      chunks++
+      items.add(u.split('#')[0])
+    }
+    return { chunks, items: items.size }
+  }
+  const inventory = [
+    { key: 'pages', label: 'School website pages', ...countWhere(u => u.startsWith('https://www.tcatitans.org/') && !u.includes('/fs/resource-manager/') && !u.includes('staff-directory') && !u.includes('/calendar#')) },
+    { key: 'documents', label: 'Documents & PDFs', ...countWhere(u => u.includes('/fs/resource-manager/') || u.includes('finalsite.net')) },
+    { key: 'staff', label: 'Staff directories', ...countWhere(u => u.includes('staff-directory')) },
+    { key: 'calendars', label: 'School calendars', ...countWhere(u => u.includes('-calendar') || u.includes('tcatitans.org/calendar')) },
+    { key: 'athletics', label: 'Athletics (GoBound)', ...countWhere(u => u.includes('gobound')) },
+    { key: 'teams', label: 'Team feeds (TeamReach)', ...countWhere(u => u.includes('teamreach')) },
+  ]
+
   let ingestRuns: IngestRunRow[] = []
   let ingestRunsTableMissing = false
   {
@@ -521,6 +551,8 @@ export async function GET(req: Request) {
     feedbackTableMissing,
     ingestRuns,
     ingestRunsTableMissing,
+    inventory,
+    inventoryTotals: { chunks: inventoryUrls.length, items: inventoryPages.size },
     // Headline counts stay historical — they describe the window, not the to-do
     // list. The lists below are the to-do list, and drop anything since fixed.
     noResultCount: allNoResults.length,

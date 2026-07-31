@@ -273,6 +273,12 @@ async function run(req: NextRequest) {
         .not('url', 'ilike', '%/fs/resource-manager/%')
         .order('url').range(from, to))).map(u => u.split('#')[0])
   )
+  /* What the corpus held before this run, kept separately because knownPages is
+   * consumed by the cleanup paths below. A page indexed this run that is not in
+   * here is a page the site has published since the last crawl — which is the
+   * thing a "what changed" report is actually asking about. */
+  const knownAtStart = new Set(knownPages)
+  const newPages: string[] = []
 
   /* What each page looked like last time, so an unchanged page costs nothing
    * beyond the fetch.
@@ -419,6 +425,7 @@ async function run(req: NextRequest) {
           if (errors <= rows.length * 3) console.error(`page_chunks insert failed for ${url}: ${error.message}`)
         } else {
           indexed += rows.length
+          if (!knownAtStart.has(url)) newPages.push(r!.title || url.replace(BASE, ''))
         }
       }
     } catch (e) {
@@ -488,6 +495,10 @@ async function run(req: NextRequest) {
     skipped,
     errors,
     stalePagesRemoved: staleRemoved,
+    // Named, not just counted: "three pages appeared" is a number, "Fall Sports
+    // Physical Form appeared" is something you can act on.
+    newPageCount: newPages.length,
+    newPages: newPages.slice(0, 40),
     elapsedMs: Date.now() - startedAt,
   })
 }

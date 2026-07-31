@@ -39,6 +39,8 @@ interface Stats {
   feedback: { id: number; created_at: string; reason: string; query: string | null; answer: string | null; note: string | null }[]
   ingestRuns: { id: number; ran_at: string; route: string; trigger: string; duration_ms: number | null; items: number | null; errors: number | null; summary: Record<string, unknown> | null }[]
   ingestRunsTableMissing: boolean
+  inventory: { key: string; label: string; items: number; chunks: number }[]
+  inventoryTotals: { chunks: number; items: number }
   feedbackCount: number
   feedbackTableMissing: boolean
   cost: {
@@ -201,6 +203,17 @@ const RUN_FIELDS = [
   'stalePagesRemoved', 'processed', 'queued', 'chunksIndexed', 'chunksInserted',
   'indexed', 'skipped', 'errors', 'fetchFailures', 'incompleteCount', 'deferredAsTooLargeCount',
 ]
+
+/** Named additions a run reported — new pages, newly extracted documents. */
+function newItemsOf(summary: Record<string, unknown> | null): string[] {
+  if (!summary) return []
+  const out: string[] = []
+  for (const k of ['newPages', 'newDocuments']) {
+    const v = summary[k]
+    if (Array.isArray(v)) out.push(...v.filter((x): x is string => typeof x === 'string'))
+  }
+  return out
+}
 
 function runDetail(summary: Record<string, unknown> | null): string {
   if (!summary) return ''
@@ -1193,6 +1206,25 @@ export default function AdminDashboard() {
 
             <UsagePanel usage={usage} internalCost={stats.cost.totalCost} />
 
+            <Section title={`What's been scraped — ${stats.inventoryTotals.items} items, ${stats.inventoryTotals.chunks} chunks`}>
+              <p className="nerd-card-sub" style={{ marginBottom: 10 }}>
+                Counted from the corpus itself rather than tracked separately, so it cannot drift from what is really there.
+                An &ldquo;item&rdquo; is a page, document, or feed; a chunk is one searchable piece of it.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {stats.inventory.map(i => (
+                  <div key={i.key} className="nerd-gap" style={{ padding: '8px 12px' }}>
+                    <div className="nerd-gap-head">
+                      <div style={{ fontSize: 13.5 }}>{i.label}</div>
+                      <div className="nerd-card-sub">
+                        <strong style={{ color: '#e6e6e6' }}>{i.items}</strong> items · {i.chunks} chunks
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Section>
+
             <Section title="What the ingest jobs did">
               {stats.ingestRunsTableMissing ? (
                 <p className="nerd-empty">
@@ -1223,6 +1255,12 @@ export default function AdminDashboard() {
                       <div className="nerd-card-sub" style={{ marginTop: 6 }}>
                         {runDetail(r.summary) || 'nothing changed'}
                       </div>
+                      {newItemsOf(r.summary).length > 0 && (
+                        <div className="nerd-card-sub" style={{ marginTop: 6, color: '#5ee6a0' }}>
+                          new: {newItemsOf(r.summary).slice(0, 8).map(t => `“${t}”`).join(' · ')}
+                          {newItemsOf(r.summary).length > 8 ? ` …and ${newItemsOf(r.summary).length - 8} more` : ''}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

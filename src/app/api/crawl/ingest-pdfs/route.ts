@@ -493,6 +493,9 @@ async function run(req: NextRequest) {
   type MessageParam = Parameters<typeof anthropic.messages.create>[0]['messages'][number]
 
   let indexedCount = 0, skipped = 0, errors = 0, processed = 0
+  // The queue holds only documents that were not already indexed, so whatever
+  // stores successfully here is genuinely new to the corpus.
+  const newDocuments: string[] = []
   let ranOutOfTime = false
   // Documents left for a later run rather than stored wrong: `incomplete` ran
   // out of extraction rounds, `deferred` was too big to start this late.
@@ -637,6 +640,7 @@ async function run(req: NextRequest) {
           if (errors <= 3) console.error(`page_chunks insert failed for ${doc.url}: ${error.message}`)
         } else {
           indexedCount++
+          if (!newDocuments.includes(title)) newDocuments.push(title)
         }
       }
     } catch (e) {
@@ -671,6 +675,8 @@ async function run(req: NextRequest) {
     queued: queue.length,
     processed,
     chunksIndexed: indexedCount,
+    newDocumentCount: newDocuments.length,
+    newDocuments: newDocuments.slice(0, 40),
     skipped,
     errors,
     // Only what this run's scan turned up and did not get to. The site-wide
