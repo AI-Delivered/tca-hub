@@ -45,7 +45,21 @@ const SKIP_PATTERNS = [
   '/giving/', '/alumni', '/titan-club', '/tca-moments-blog',
   '/explore-tca/tca-titan-of-the-year', '/explore-tca/tca-moments',
   '/sitemap', '/login', '/logout', '/search', 'const_page=',
-  'javascript:', '/uploaded/', '/staff-directory', // handled by ingest-staff
+  'javascript:', '/uploaded/',
+  /* 'staff-directory' without a leading slash, which is the whole fix.
+   *
+   * The intent was always to leave these to ingest-staff, but '/staff-directory'
+   * only matched /family/staff-directory. The per-campus pages are named
+   * '<campus>-staff-directory', so the crawler kept indexing all seven — one
+   * flat chunk each, at the same URLs where ingest-staff stores its categorised
+   * ones (…#leadership, …#teaching-staff). Redundant content competing with a
+   * better version of itself.
+   *
+   * It also made them permanently "new": the known-pages query excludes
+   * '%staff-directory%' with no slash, so these were absent from it and every
+   * crawl reported all seven as newly discovered.
+   */
+  'staff-directory',
 
   // Documents. These are handled by ingest-pdfs, which sends them to Claude to
   // extract properly; this crawler would fetch the same URL, run htmlToText
@@ -254,7 +268,7 @@ async function run(req: NextRequest) {
    * context: retrieval returns both, and they say the same thing. Keyed on the
    * text itself, so it catches any aliasing the site does, not just this one.
    */
-  const storedText = new Set<string>()
+  const storedText = new Map<string, string>()
   let ranOutOfTime = false
 
   /* What the corpus already holds, read once up front.
@@ -405,17 +419,39 @@ async function run(req: NextRequest) {
         }
         if (!rows.length) continue
 
+        /* Which of two aliases to keep, decided the same way every run.
+         *
+         * This kept whichever URL breadth-first order reached first, and that
+         * order varies. So /schools/high-school and /schools/high-school/homepage
+         * traded places between runs: each crawl deleted one and stored the
+         * other, and the next crawl reported the loser as a newly discovered
+         * page. Eleven pages were "new" on every single run for that reason —
+         * a report that cries wolf is worth no more than no report.
+         *
+         * The URL already in the corpus wins. That is stable by construction:
+         * once a pair settles on one alias, every later run makes the same
+         * choice.
+         */
         const fingerprint = r!.text.slice(0, 2000)
-        if (storedText.has(fingerprint)) {
+        const twin = storedText.get(fingerprint)
+        if (twin && twin !== url) {
           duplicates++
-          // Drop any rows a previous run stored under this alias.
-          if (knownPages.has(url)) {
-            await supabase.from('page_chunks').delete().eq('url', url)
-            knownPages.delete(url)
+          const twinIsKnown = knownAtStart.has(twin)
+          const thisIsKnown = knownAtStart.has(url)
+          if (thisIsKnown && !twinIsKnown) {
+            // This run stored the newcomer first; hand the slot back.
+            await supabase.from('page_chunks').delete().eq('url', twin)
+            knownPages.delete(twin)
+            storedText.set(fingerprint, url)
+          } else {
+            if (knownPages.has(url)) {
+              await supabase.from('page_chunks').delete().eq('url', url)
+              knownPages.delete(url)
+            }
+            continue
           }
-          continue
         }
-        storedText.add(fingerprint)
+        storedText.set(fingerprint, url)
 
         // Replace this page's rows, now that nothing was cleared up front.
         await supabase.from('page_chunks').delete().eq('url', url)
