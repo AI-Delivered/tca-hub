@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { sanitizeForPostgres } from '@/lib/ingest-chunks'
+import { normalizeContent } from '@/lib/normalize-content'
 import { fetchAllUrls } from '@/lib/page-urls'
 import { withIngestLog } from '@/lib/ingest-log'
 
@@ -612,7 +613,7 @@ async function run(req: NextRequest) {
       // Unsanitised, every chunk of such a document failed to insert, the
       // document never got marked indexed, and the next run picked it up and
       // paid to extract it again — forever.
-      content = sanitizeForPostgres(content)
+      content = normalizeContent(sanitizeForPostgres(content))
 
       if (!content || content.length < 100) { skipped++; return }
 

@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { fetchAllUrls } from '@/lib/page-urls'
 import { pageBody } from '@/lib/page-body'
+import { normalizeContent } from '@/lib/normalize-content'
 import { qualifiedTitle } from '@/lib/page-title'
 import { withIngestLog } from '@/lib/ingest-log'
 
@@ -366,7 +367,7 @@ async function run(req: NextRequest) {
      * of navigation every page carries, so a page consisting of nothing but
      * chrome cleared a 150-character floor on chrome alone. See lib/page-body.
      */
-    for (const res of results) if (res.r) res.r.text = pageBody(res.r.text)
+    for (const res of results) if (res.r) res.r.text = normalizeContent(pageBody(res.r.text))
     const toEmbed = results.filter(({ r }) => r && r.text.length >= 150)
 
     /* A page that no longer qualifies has to have its old rows removed.

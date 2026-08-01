@@ -16,6 +16,7 @@
 // as its own row under the same URL — exactly what those routes already do.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { normalizeContent } from '@/lib/normalize-content'
 
 /** Matches the chunking used by ingest-deep / ingest-pdfs / ingest-visual. */
 const CHUNK_SIZE = 1800
@@ -95,7 +96,7 @@ export async function storeChunks(
   record: ChunkRecord,
   crawledAt: string
 ): Promise<StoreResult> {
-  const pieces = chunkText(sanitizeForPostgres(record.content))
+  const pieces = chunkText(normalizeContent(sanitizeForPostgres(record.content)))
   let inserted = 0
   let errors = 0
 
