@@ -1041,11 +1041,37 @@ Answer style:
    *
    * `schoolYearLabel` stays inside the cached block deliberately: it changes
    * once a year, and a yearly invalidation is not worth a second block. */
+  /* "This week" and "next week", worked out here rather than left to the model.
+   *
+   * Asked "when is football practice next week" on Saturday 1 August, the app
+   * answered from 10 August. The practices for 3-7 August were in the context —
+   * retrieval was fine — it simply resolved "next week" to the wrong seven days.
+   * A parent asking on a Saturday means the week starting in two days, and
+   * saying so with dates removes the judgement call entirely.
+   *
+   * Weeks run Monday to Sunday, so on a Saturday "this week" is the one now
+   * ending and "next week" begins on the Monday two days out.
+   */
+  const denverToday = new Date(now.toLocaleString('en-US', { timeZone: 'America/Denver' }))
+  const dayOfWeek = (denverToday.getDay() + 6) % 7 // 0 = Monday
+  const weekStart = new Date(denverToday)
+  weekStart.setDate(weekStart.getDate() - dayOfWeek)
+  const span = (start: Date, days: number) => {
+    const a = new Date(start)
+    const b = new Date(start)
+    b.setDate(b.getDate() + days)
+    const f = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+    return `${f(a)} through ${f(b)}`
+  }
+  const nextWeekStart = new Date(weekStart)
+  nextWeekStart.setDate(nextWeekStart.getDate() + 7)
+
   const systemBlocks = [
     { type: 'text' as const, text: systemPrompt, cache_control: { type: 'ephemeral' as const } },
     {
       type: 'text' as const,
-      text: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current time is approximately ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })} Mountain Time.`,
+      text: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current time is approximately ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })} Mountain Time.
+"This week" means ${span(weekStart, 6)}. "Next week" means ${span(nextWeekStart, 6)}. Use those exact ranges — do not work them out again — and when a question uses either phrase, name the dates you are answering for so the parent can check you meant the same week they did.`,
     },
   ]
 

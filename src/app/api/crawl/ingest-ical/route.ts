@@ -150,6 +150,27 @@ function parseIcal(text: string): CalEvent[] {
   return events
 }
 
+/** The Date an iCal timestamp denotes, or null if it is an all-day value. */
+function parseIcalTime(dtstr: string): Date | null {
+  const isUtc = dtstr.endsWith('Z')
+  const clean = dtstr.replace(/Z$/, '')
+  const m = clean.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/)
+  if (!m) return null
+  const [, year, month, day, hour, minute] = m
+  if (isUtc) return new Date(`${year}-${month}-${day}T${hour}:${minute}:00Z`)
+  // Local Denver time — approximate offset (MDT Apr–Oct = -06:00, MST Nov–Mar = -07:00)
+  const mo = parseInt(month)
+  const offset = (mo >= 4 && mo <= 10) ? '-06:00' : '-07:00'
+  return new Date(`${year}-${month}-${day}T${hour}:${minute}:00${offset}`)
+}
+
+/** "5:30 PM" — the clock time alone, for the end of a same-day event. */
+function formatTimeOnly(dtstr: string): string {
+  const d = parseIcalTime(dtstr)
+  if (!d || isNaN(d.getTime())) return ''
+  return d.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })
+}
+
 function formatDate(dtstr: string): string {
   const isUtc = dtstr.endsWith('Z')
   const clean = dtstr.replace(/Z$/, '')
@@ -284,9 +305,41 @@ async function run(req: NextRequest) {
         d.setUTCDate(d.getUTCDate() - 1)
         endDay = d.toISOString().slice(0, 10).replace(/-/g, '')
       }
-      const dateStr = (endDay && endDay !== startDay)
+      /* End times, which this used to throw away.
+       *
+       * A range was only produced for events spanning more than one day, so a
+       * practice — the overwhelmingly common case — showed its start and
+       * nothing else: "Tue, Aug 11, 2026, 3:30 PM: Football Practice". A parent
+       * arranging a pick-up needs the other end of that.
+       *
+       * The feed had it all along: 1,466 of TeamReach's 1,606 events carry a
+       * DTEND distinct from DTSTART. GoBound's side already showed "5 PM–7 PM",
+       * so the two sources disagreed about how complete a practice looked
+       * depending on which route ingested it.
+       */
+      /* Same day, judged in Denver rather than in whatever zone the feed used.
+       *
+       * TeamReach publishes in UTC, so an evening event routinely ends on the
+       * next UTC date: the JV game at Resurrection Christian is
+       * DTSTART 20260914T220003Z, DTEND 20260915T000003Z — 4pm to 6pm on one
+       * Monday afternoon. Comparing the raw date strings called that a two-day
+       * event and rendered it "Mon, Sep 14, 4:00 PM – Tue, Sep 15", which reads
+       * as an overnight stay. 358 of the feed's 1,556 timed events cross
+       * midnight UTC that way, so it was 23% of them.
+       */
+      const startAt = parseIcalTime(e.start)
+      const endAt = parseIcalTime(e.end)
+      const denverDay = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
+      const spansDays = startAt && endAt
+        ? denverDay(startAt) !== denverDay(endAt)
+        : Boolean(endDay && endDay !== startDay)
+
+      const endTime = !spansDays && startAt && endAt ? formatTimeOnly(e.end) : ''
+      const dateStr = spansDays
         ? `${formatDate(e.start)} – ${formatDate(endDay)}`
-        : formatDate(e.start)
+        : endTime && endTime !== formatTimeOnly(e.start)
+          ? `${formatDate(e.start)}–${endTime}`
+          : formatDate(e.start)
       const desc = includeDescription && e.description
         ? '\n    ' + e.description.replace(/\\n/g, '\n    ').replace(/\\,/g, ',').replace(/\^\^/g, '').trim()
         : ''
