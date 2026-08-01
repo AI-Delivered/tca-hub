@@ -638,10 +638,29 @@ export async function POST(req: NextRequest) {
     ? vectorHits
     : vectorHits.filter((c, i) => i < MIN_VECTOR_CHUNKS || bestScore - c.similarity <= RELEVANCE_MARGIN)
 
+  /* One chunk per URL, however many anchors asked for it.
+   *
+   * Several anchors run for one question — athletics, sport-specific, named
+   * event, campus — and they overlap heavily. Asked "is there football practice
+   * next week", the context held 43 chunks of which 27 were anchor duplicates:
+   * fifteen identical copies of "TCA Athletics — Upcoming" and six of Girls
+   * Flag Football. The one chunk that answered the question sat first and was
+   * buried under repetition of chunks that did not.
+   *
+   * Deduplicating on url alone was not enough because only the vector hits were
+   * being checked against; the anchors were never compared with each other.
+   */
   const seenUrls = new Set(relevant.map((c: Chunk) => c.url))
+  const dedupedKeyword: Chunk[] = []
+  for (const c of keywordChunks) {
+    if (seenUrls.has(c.url)) continue
+    seenUrls.add(c.url)
+    dedupedKeyword.push(c)
+  }
+
   const merged: Chunk[] = [
     ...relevant,
-    ...keywordChunks.filter(c => !seenUrls.has(c.url)),
+    ...dedupedKeyword,
     // Applied here rather than at ingest so it covers what is already stored,
     // and so the cutoff moves with the school year instead of being baked into
     // whatever the corpus happened to look like on crawl day.
@@ -1005,8 +1024,10 @@ Current school year is ${schoolYearLabel}. A date is "past" only if it is before
 
 Calendar data is authoritative: if the calendar context includes a month's events and a specific date in that month is NOT listed as a closure, no-school day, or break, then school IS in session on that date. You do not need to say "I'm not sure" — if you have the month's data and the date isn't listed as a closure, confidently say school is in session. Only express uncertainty if you don't have that month's calendar data at all.
 
-Sports schedule accuracy rule: The schedule data comes from two sources — GoBound (authoritative, covers all TCA sports) and TeamReach (team-specific, may have different wording). When they conflict, GoBound wins. The "TCA Athletics — Upcoming" chunk is the most reliable source for times and dates. Rules:
-1. Use the time from the GoBound upcoming chunk. If TeamReach says a different time or calls something "tentative," defer to GoBound.
+Sports schedule accuracy rule: The schedule data comes from two sources and they cover different things. GoBound ("TCA Athletics — …" chunks) carries games, meets and competitions for every TCA sport. TeamReach ("TCA HS Football — …", "TCA JH Football — …" chunks) is the coaches' own feed and is the ONLY source of practices, weights and training. Rules:
+1. For a GAME or competition time, GoBound wins — if TeamReach gives a different time or says "tentative," defer to GoBound.
+1a. For a PRACTICE, look in the TeamReach chunks. GoBound does not list practices, so its silence means nothing: never answer "there are no practices" because a GoBound chunk does not show any. Asked whether there is practice next week, read the TeamReach "Practices & Training" and "Upcoming" chunks for that team and answer from those.
+1b. A question about "football" with no level given means the high school team. Answer for HS first; mention JH only if you have nothing for HS or the parent asked for it.
 2. When asked about a specific level, ONLY list dates/times from events tagged with that EXACT level.
 3. [Football C-Squad (Boys)] events are C-Squad only. They are not Varsity. Never include them in a Varsity answer.
 4. If no upcoming events appear in context, link to https://gobound.com/co/schools/theclassahs/calendar?v=list — never fabricate URLs.
