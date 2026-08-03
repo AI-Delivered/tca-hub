@@ -413,6 +413,68 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  /* Exact-phrase anchor for named things.
+   *
+   * Found by find-denials.mjs: "when does Titans for Christ meet" and "does TCA
+   * have a Titans for Christ" both came back with a flat "I don't have
+   * information about that", while the club sits in the HS student
+   * organizations PDF with its meeting day and room.
+   *
+   * The cause is not rarity — "Creative Writing Club" is in exactly one chunk
+   * too and answers fine. It is collision. "Titans" appears in 283 of 2,242
+   * chunks because it is the mascot and the domain name, so the embedding of
+   * "Titans for Christ" is dominated by the generic-school-branding direction
+   * and retrieval returns homepages and the fundraising page. The one chunk
+   * that actually names the club never places.
+   *
+   * An embedding cannot easily be talked out of this, but exact text can: if a
+   * multi-word phrase from the question appears verbatim in only a few chunks,
+   * those chunks are about that thing, whatever the vectors think. This is
+   * deliberately general rather than a list of club names — the same trap waits
+   * for any program, award or event whose name reuses common school vocabulary
+   * ("Titan Club", "Classical Cup", "North Star Award"). */
+  const PHRASE_STOP = new Set(['the', 'a', 'an', 'is', 'are', 'was', 'were', 'do', 'does', 'did', 'when', 'what',
+    'where', 'who', 'whom', 'how', 'why', 'which', 'at', 'in', 'on', 'for', 'of', 'to', 'and', 'or', 'my', 'our',
+    'their', 'there', 'tca', 'school', 'have', 'has', 'had', 'can', 'i', 'me', 'we', 'you', 'it', 'that', 'this',
+    'be', 'with', 'about', 'any', 'get', 'go', 'us', 'from', 'if', 'so', 'll', 's'])
+
+  const phraseWords = query.toLowerCase().replace(/[^\w\s'’-]/g, ' ').split(/\s+/).filter(Boolean)
+  const candidates: string[] = []
+  // Longest first: "titans for christ meet" is tried before "titans for christ",
+  // and a longer phrase that matches is stronger evidence than a shorter one.
+  for (let len = 4; len >= 2 && candidates.length < 8; len--) {
+    for (let i = 0; i + len <= phraseWords.length; i++) {
+      const slice = phraseWords.slice(i, i + len)
+      // Anchoring on a phrase that opens or closes with a filler word matches
+      // sentence noise rather than a name.
+      if (PHRASE_STOP.has(slice[0]) || PHRASE_STOP.has(slice[len - 1])) continue
+      if (!slice.some(w => !PHRASE_STOP.has(w) && w.length >= 3)) continue
+      candidates.push(slice.join(' '))
+    }
+  }
+
+  if (candidates.length) {
+    const found = await Promise.all(candidates.map(async phrase => {
+      /* Cap at 9 so a phrase matching more than 8 chunks is recognised as
+       * ordinary vocabulary and skipped — an anchor is only justified when the
+       * phrase actually pins down a small set of pages. */
+      const { data } = await supabase
+        .from('page_chunks')
+        .select('url, title, content')
+        .ilike('content', `%${phrase.replace(/[%_]/g, ' ')}%`)
+        .limit(9)
+      return { phrase, rows: data ?? [] }
+    }))
+
+    // Longest phrase that is distinctive enough to be worth anchoring on.
+    const best = found.find(f => f.rows.length > 0 && f.rows.length <= 8)
+    if (best) {
+      // Below the 0.90 athletics anchor, above the 0.68 event net: an exact
+      // multi-word match is strong evidence, but a live schedule still wins.
+      keywordChunks = [...keywordChunks, ...best.rows.map(c => ({ ...c, similarity: 0.88 }))]
+    }
+  }
+
   // Staff question about a named campus — resolved here rather than left to the
   // embedding. Every campus has near-identical "<Campus> — <Category>" chunks
   // competing for the top-16 slots, so "who's the middle school principal" can
