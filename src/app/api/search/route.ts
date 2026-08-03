@@ -490,18 +490,38 @@ export async function POST(req: NextRequest) {
     .split(/\s+/)
     .filter(t => t.length >= 5 && !STAFF_STOPWORDS.has(t) && !CAMPUS_WORDS.has(t))
   if (eventTerms.length) {
+    /* Asked per source, not once across all of them.
+     *
+     * A single query with one limit lets whichever source has the most rows
+     * take every slot. Searching '%cross%' across all event sources returned
+     * eight chunks, every one of them GoBound or TeamReach, so the Landsharks
+     * page — the only place elementary cross country exists — was never
+     * reached. The app told a parent whose child is signed up that "cross
+     * country is not offered at the elementary level".
+     *
+     * A small budget per source means a term present in a small source still
+     * surfaces it. They run concurrently, so this costs latency once, not once
+     * per source.
+     */
+    const EVENT_SOURCES = [
+      'url.ilike.%gobound%',
+      'url.ilike.%teamreach%',
+      'url.ilike.%landsharks%',
+      'url.ilike.%-calendar%',
+      'url.ilike.%tcatitans.org/calendar%',
+      'url.ilike.newsletter://%',
+    ]
     const eventRows = await Promise.all(
-      eventTerms.slice(0, 2).map(term =>
-        supabase
-          .from('page_chunks')
-          .select('url, title, content')
-          // Every source that carries dated events. TeamReach belongs here and
-          // was the omission that kept this from working: the homecoming
-          // football game lives only in the coaches' own feed.
-          .or('url.ilike.%gobound%,url.ilike.%teamreach%,url.ilike.%-calendar%,url.ilike.%tcatitans.org/calendar%')
-          .ilike('content', `%${term}%`)
-          .limit(8)
-          .then(r => r.data ?? [])
+      eventTerms.slice(0, 2).flatMap(term =>
+        EVENT_SOURCES.map(src =>
+          supabase
+            .from('page_chunks')
+            .select('url, title, content')
+            .or(src)
+            .ilike('content', `%${term}%`)
+            .limit(3)
+            .then(r => r.data ?? [])
+        )
       )
     )
     // Below the athletics anchor's 0.90 — these are a widening of the net, not

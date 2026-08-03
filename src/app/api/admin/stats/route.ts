@@ -145,6 +145,12 @@ const SOURCES: { key: string; label: string; pattern: string; maxAgeHours: numbe
   { key: 'athletics', label: 'Athletics schedule (GoBound)', pattern: '%gobound%', maxAgeHours: 30, note: 'ingest-calendar and ingest-bound, daily' },
   { key: 'teamreach', label: 'Team feeds (TeamReach)', pattern: '%teamreach%', maxAgeHours: 30, note: 'ingest-ical daily — the only source of practice times' },
   { key: 'calendars', label: 'School calendars', pattern: '%-calendar%', maxAgeHours: 30, note: 'ingest-ical daily' },
+  /* The only source for elementary cross country. Nothing on tcatitans.org,
+   * GoBound or TeamReach mentions it, so if this goes stale the app does not
+   * degrade to an older answer — it goes back to saying the sport is not
+   * offered at the elementary level, which is what it said before this
+   * existed. */
+  { key: 'landsharks', label: 'Elementary cross country (Landsharks)', pattern: '%landsharks%', maxAgeHours: 30, note: 'ingest-landsharks daily' },
   { key: 'staff', label: 'Staff directories', pattern: '%staff-directory%', maxAgeHours: 24 * 8, note: 'ingest-staff weekly' },
   { key: 'documents', label: 'Documents & PDFs', pattern: '%resource-manager%', maxAgeHours: 24 * 8, note: 'ingest-pdfs weekly' },
   { key: 'documents_cdn', label: 'Documents (Finalsite CDN)', pattern: '%finalsite.net%', maxAgeHours: 24 * 8, note: 'ingest-pdfs weekly' },
