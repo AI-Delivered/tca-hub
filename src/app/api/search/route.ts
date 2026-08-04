@@ -1106,9 +1106,9 @@ Current school year is ${schoolYearLabel}. A date is "past" only if it is before
 
 Calendar data is authoritative: if the calendar context includes a month's events and a specific date in that month is NOT listed as a closure, no-school day, or break, then school IS in session on that date. You do not need to say "I'm not sure" — if you have the month's data and the date isn't listed as a closure, confidently say school is in session. Only express uncertainty if you don't have that month's calendar data at all.
 
-Sports schedule accuracy rule: The schedule data comes from two sources and they cover different things. GoBound ("TCA Athletics — …" chunks) carries games, meets and competitions for every TCA sport. TeamReach ("TCA HS Football — …", "TCA JH Football — …" chunks) is the coaches' own feed and is the ONLY source of practices, weights and training. Rules:
+Sports schedule accuracy rule: The schedule data comes from two sources. GoBound ("TCA Athletics — …" chunks) carries games, meets and competitions, and now also carries practices for many teams. TeamReach ("TCA HS Football — …", "TCA JH Football — …" chunks) is a coach's own feed, connected for a few teams only, and carries practices, weights and training in more detail. Rules:
 1. For a GAME or competition time, GoBound wins — if TeamReach gives a different time or says "tentative," defer to GoBound.
-1a. For a PRACTICE, look in the TeamReach chunks. GoBound does not list practices, so its silence means nothing: never answer "there are no practices" because a GoBound chunk does not show any. Asked whether there is practice next week, read the TeamReach "Practices & Training" and "Upcoming" chunks for that team and answer from those.
+1a. For a PRACTICE, check BOTH sources. GoBound lists practices for many teams and TeamReach adds detail for the few teams it covers, so a practice may appear in either or both. Answer from whichever chunks actually show practices for the team asked about, and if both show the same practice at different times, say so and name both. Never answer "there are no practices" because one source does not show any — a source that has no entry for a team is silent, not authoritative. If neither source shows a practice, say none are listed for that team rather than saying none exist.
 1b. A question about "football" with no level given means the high school team. Answer for HS first; mention JH only if you have nothing for HS or the parent asked for it.
 2. When asked about a specific level, ONLY list dates/times from events tagged with that EXACT level.
 3. [Football C-Squad (Boys)] events are C-Squad only. They are not Varsity. Never include them in a Varsity answer.
@@ -1169,12 +1169,59 @@ Answer style:
   const nextWeekStart = new Date(weekStart)
   nextWeekStart.setDate(nextWeekStart.getDate() + 7)
 
+  /* Which teams have a TeamReach feed connected.
+   *
+   * TeamReach groups are joined with a per-team code, so the only feeds we can
+   * have are the ones a single parent could join — currently HS and JH
+   * Football.
+   *
+   * This used to be the whole practice story, and the prompt said so. It is not
+   * any more: GoBound now carries 277 distinct practice entries across eight
+   * sports, added by the school over the summer. The first version of this note
+   * asserted there was no practice data for any other sport, which was already
+   * false when it was written — the app answered a volleyball practice question
+   * correctly straight from GoBound while the note claimed it could not.
+   *
+   * So this names the TeamReach feeds as *additional* detail rather than as the
+   * boundary of what is known. Read from the corpus rather than hardcoded, so a
+   * feed added or dropped does not leave a false claim behind — which is the
+   * failure this whole note exists to prevent. */
+  let coveredTeams: string[] = []
+  try {
+    const { data: trRows } = await supabase
+      .from('page_chunks')
+      .select('title')
+      .ilike('url', '%teamreach%')
+      .limit(200)
+    coveredTeams = [...new Set((trRows ?? [])
+      .map(r => String(r.title ?? '').split('—')[0].trim())
+      .filter(Boolean))].sort()
+  } catch { /* leave empty — the rule below then says we have no practice feeds */ }
+
+  const practiceNote = `Practice-schedule coverage: GoBound lists practices for many TCA teams, and is the broadest practice source — always check the GoBound chunks for a practice question, whatever the sport.${coveredTeams.length ? ` In addition, a coach's TeamReach feed is connected for these teams only: ${coveredTeams.join(', ')}; for those, TeamReach may carry detail or last-minute changes GoBound does not.` : ''} If a practice question turns up nothing for the team asked about, say that no practices are currently listed for that team, point to GoBound, and suggest the coach or athletics office — never say or imply the team has no practices, and never answer from a different team's schedule.`
+
+  /* Say where athletics answers come from and what that source does not cover.
+   *
+   * TCA moved athletics onto GoBound and is still filling it in — rosters and
+   * stats are empty, and schedules populate as the season nears. An answer
+   * drawn from a half-filled source reads exactly like an answer drawn from a
+   * complete one, and the parent has no way to tell which they got.
+   *
+   * Scoped to thin or empty athletics answers on purpose. A caveat attached to
+   * every answer is noise that gets skimmed past, and it would undercut the
+   * many answers that are complete and correct. */
+  const coverageNote = `${practiceNote}
+
+Athletics data provenance: game and competition schedules come from GoBound, which is the school's system and shows only what TCA has entered so far — it is still being populated for the 2026-27 year, and rosters and statistics are largely empty. When an athletics answer is thin, partial, or turns up nothing, say which source you looked in and that it only reflects what the school has published there so far, then point to https://gobound.com/co/schools/theclassahs/calendar?v=list. Do not present an empty or sparse result as if it were the complete picture, and do not treat missing data as evidence that an event, team or sport does not exist. When you do have the answer, just give it — no caveat needed.`
+
   const systemBlocks = [
     { type: 'text' as const, text: systemPrompt, cache_control: { type: 'ephemeral' as const } },
     {
       type: 'text' as const,
       text: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current time is approximately ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })} Mountain Time.
-"This week" means ${span(weekStart, 6)}. "Next week" means ${span(nextWeekStart, 6)}. Use those exact ranges — do not work them out again — and when a question uses either phrase, name the dates you are answering for so the parent can check you meant the same week they did.`,
+"This week" means ${span(weekStart, 6)}. "Next week" means ${span(nextWeekStart, 6)}. Use those exact ranges — do not work them out again — and when a question uses either phrase, name the dates you are answering for so the parent can check you meant the same week they did.
+
+${coverageNote}`,
     },
   ]
 

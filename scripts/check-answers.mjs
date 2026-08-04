@@ -73,6 +73,21 @@ const CASES = [
     must: ['August'],
     why: 'K on the 19th, grades 1-6 on the 20th',
   },
+  /* The two below assert what must NOT be said rather than a fact, because the
+   * fact changes weekly and the failure does not. This is the shape that nearly
+   * ended the project: a confident "no" about a practice that is on the
+   * schedule. Volleyball has no TeamReach feed and its practices come from
+   * GoBound alone, so it is the case most likely to regress. */
+  {
+    q: 'is there volleyball practice this week?',
+    mustNot: ['no volleyball practice', 'there are no practices', "don't have practice schedules"],
+    why: 'GoBound carries volleyball practices — a denial here is the football bug again',
+  },
+  {
+    q: 'does TCA have a wrestling team?',
+    mustNot: ["doesn't have", 'does not have', 'not offered'],
+    why: 'thin schedule data must never become "the sport does not exist"',
+  },
 ]
 
 /* /api/search allows 20 requests a minute, and this suite fires more than that.

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback, useMemo, useId } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, useId, useSyncExternalStore } from 'react'
 import { renderAnswer, preloadSanitizer } from '@/lib/markdown'
 
 const SUGGESTIONS = [
@@ -393,7 +393,7 @@ function ReportPanel({
 function SavePhonePanel({ onClose }: { onClose: () => void }) {
   const ref = useDialog(onClose)
   const titleId = useId()
-  const isIos = typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent)
+  const isIos = useIsIos()
 
   return (
     <div className="tca-scrim" data-align="bottom" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
@@ -428,17 +428,45 @@ function SavePhonePanel({ onClose }: { onClose: () => void }) {
   )
 }
 
+/* Is this actually an iPhone or iPad?
+ *
+ * Both places that ask are offering iOS home-screen instructions, which are
+ * useless anywhere else — the footer button on a desktop was just telling
+ * people to look for a Share icon their browser does not have.
+ *
+ * Detected after mount rather than during render: the server has no user agent,
+ * so deciding at render time would either mismatch on hydration or force the
+ * whole page off static rendering.
+ *
+ * iPadOS 13+ identifies itself as "Macintosh" and is only distinguishable by
+ * having touch points, which is why the plain userAgent test is not enough on
+ * its own. A real Mac reports maxTouchPoints of 0. */
+const noopSubscribe = () => () => {}
+const readIsIos = () => {
+  const ua = navigator.userAgent
+  return /iphone|ipad|ipod/i.test(ua) || (/macintosh/i.test(ua) && navigator.maxTouchPoints > 1)
+}
+
+function useIsIos() {
+  /* useSyncExternalStore rather than an effect: the user agent is a value read
+   * from the platform, not state React owns, and it never changes for the life
+   * of the page — hence the no-op subscribe. The server snapshot is false, so
+   * markup renders without the iOS-only controls and they appear on hydration. */
+  return useSyncExternalStore(noopSubscribe, readIsIos, () => false)
+}
+
 function AddToHomePrompt() {
   const [visible, setVisible] = useState(false)
+  const isIos = useIsIos()
 
   useEffect(() => {
-    const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent)
     const isStandalone = (navigator as { standalone?: boolean }).standalone === true
     if (!isIos || isStandalone) return
     try { if (localStorage.getItem('tca_a2hs')) return } catch { return }
     const t = setTimeout(() => setVisible(true), 4000)
     return () => clearTimeout(t)
-  }, [])
+    // isIos starts false and flips after mount, so this has to re-run on it.
+  }, [isIos])
 
   if (!visible) return null
 
@@ -649,6 +677,10 @@ export default function Home() {
   const [dismissedCompletion, setDismissedCompletion] = useState('')
   const [showCalendars, setShowCalendars] = useState(false)
   const [showSavePhone, setShowSavePhone] = useState(false)
+  // Gates the footer's "Save to iPhone" button — the tips behind it are iOS
+  // Share-sheet instructions, so on a desktop it pointed at a control that
+  // isn't there.
+  const isIos = useIsIos()
   // What the report sheet is about. Carries the answer so the report is
   // readable later without having to reconstruct which reply it referred to.
   const [reportTarget, setReportTarget] = useState<{ query: string; answer: string } | null>(null)
@@ -1099,9 +1131,11 @@ export default function Home() {
       <AddToHomePrompt />
 
       <footer className="tca-footer">
-        <button className="tca-footer-btn" onClick={() => setShowSavePhone(true)}>
-          Save to iPhone
-        </button>
+        {isIos && (
+          <button className="tca-footer-btn" onClick={() => setShowSavePhone(true)}>
+            Save to iPhone
+          </button>
+        )}
         <p>The Classical Academy · Colorado Springs, Colorado</p>
       </footer>
     </div>
