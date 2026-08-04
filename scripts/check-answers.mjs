@@ -73,15 +73,20 @@ const CASES = [
     must: ['August'],
     why: 'K on the 19th, grades 1-6 on the 20th',
   },
-  /* The two below assert what must NOT be said rather than a fact, because the
-   * fact changes weekly and the failure does not. This is the shape that nearly
-   * ended the project: a confident "no" about a practice that is on the
-   * schedule. Volleyball has no TeamReach feed and its practices come from
-   * GoBound alone, so it is the case most likely to regress. */
+  /* Volleyball has no TeamReach feed, so its practices come from GoBound alone
+   * — the case most likely to regress if the practice rules change.
+   *
+   * Deliberately "the next practice" and not "practice this week". The first
+   * version of this case asked about this week and asserted the answer must not
+   * say there were none, which was false the day it was written: the corpus had
+   * no volleyball practice in that range at all. A test that forbids the
+   * correct answer trains the fix in the wrong direction — it would have
+   * rewarded the model for inventing practices. */
   {
-    q: 'is there volleyball practice this week?',
-    mustNot: ['no volleyball practice', 'there are no practices', "don't have practice schedules"],
-    why: 'GoBound carries volleyball practices — a denial here is the football bug again',
+    q: 'when is the next volleyball practice?',
+    must: ['August'],
+    mustNot: ['not offered', "doesn't have a volleyball"],
+    why: 'GoBound lists JH volleyball practices through late August',
   },
   {
     q: 'does TCA have a wrestling team?',

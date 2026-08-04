@@ -1169,6 +1169,69 @@ Answer style:
   const nextWeekStart = new Date(weekStart)
   nextWeekStart.setDate(nextWeekStart.getDate() + 7)
 
+  /* The complete set of dated events inside the week the parent asked about,
+   * computed here in code rather than left to the model to work out.
+   *
+   * Measured failure this was built for: asked "is there volleyball practice
+   * this week", the app answered five times out of five with a JH Volleyball
+   * practice on Wednesday August 7 and Thursday August 8, 3:30-5:30 PM at the
+   * North Campus Auxiliary Gym. A scan of all 2,295 chunks in every source
+   * found no volleyball entry on either date. What exists is a real recurring
+   * Wednesday/Thursday practice starting August 12 — the model took the
+   * pattern and slid it back a week to fit the question. Team, time and
+   * location were all correct, which is exactly what makes it dangerous: a
+   * parent would have driven their child to an empty gym.
+   *
+   * Prose did not fix it. An explicit "check each date against the range"
+   * instruction made it worse, 1-in-3 correct to 0-in-5, and the model started
+   * echoing the phrasing of the example in the rule. So the range check moves
+   * out of the prompt and into code: filter the context to the asked-about
+   * dates and hand over the result as a closed list. There is then nothing to
+   * extrapolate from, because the events of neighbouring weeks are not in
+   * front of it when it answers.
+   *
+   * Dates here are Denver wall-clock components, so they are read with the
+   * local getters — denverToday already holds the shifted values, and applying
+   * a timeZone again would shift them twice. */
+  const ymd = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const shift = (d: Date, days: number) => { const x = new Date(d); x.setDate(x.getDate() + days); return x }
+
+  const RANGES: Record<string, () => [Date, Date]> = {
+    'this week': () => [weekStart, shift(weekStart, 6)],
+    'next week': () => [nextWeekStart, shift(nextWeekStart, 6)],
+    'this weekend': () => [shift(weekStart, 5), shift(weekStart, 6)],
+    'today': () => [denverToday, denverToday],
+    'tonight': () => [denverToday, denverToday],
+    'tomorrow': () => [shift(denverToday, 1), shift(denverToday, 1)],
+  }
+  const askedRange = Object.keys(RANGES).find(k => new RegExp(`\\b${k}\\b`, 'i').test(query))
+
+  let rangeNote = ''
+  /* Only meaningful if a dated schedule actually came back. "No events in
+   * range" is evidence when the calendar is in front of us and that week is
+   * empty; it is worthless when retrieval returned no calendar at all, and
+   * asserting it then produces a confident "nothing is on today" over a day
+   * with eight events — which is what the first version of this did to "what
+   * is happening today at TCA". Absence from the retrieved context is not
+   * absence from the schedule. */
+  const contextHasSchedule = /^\d{4}-\d{2}-\d{2}/m.test(context)
+  if (askedRange && contextHasSchedule) {
+    const [from, to] = RANGES[askedRange]()
+    const lo = ymd(from), hi = ymd(to)
+    const inRange = [...new Set(
+      context.split('\n')
+        .map(l => l.trim())
+        .filter(l => { const d = l.match(/^(\d{4}-\d{2}-\d{2})/)?.[1]; return d !== undefined && d >= lo && d <= hi })
+    )].sort()
+
+    const label = `${askedRange} (${lo} to ${hi})`
+    rangeNote = inRange.length
+      // Capped so a busy week cannot crowd out the retrieved pages themselves.
+      ? `Dated events in your context for ${label} — this list was computed from that context and is COMPLETE:\n${inRange.slice(0, 60).join('\n')}\n\nAnswer only from these lines. If the team or activity the parent asked about does not appear above, then nothing is scheduled for it in that range and you must say so plainly. Never move an event from another week onto these dates, and never combine a date from this list with a time from elsewhere.`
+      : `The schedule data you were given contains NO events for ${label}. Say plainly that nothing is listed for that period in the schedules you can see. Do not construct an event for it from a recurring pattern in another week — if you name the next scheduled dates instead, label them with the week they are actually in.`
+  }
+
   /* Which teams have a TeamReach feed connected.
    *
    * TeamReach groups are joined with a per-team code, so the only feeds we can
@@ -1220,6 +1283,8 @@ Athletics data provenance: game and competition schedules come from GoBound, whi
       type: 'text' as const,
       text: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current time is approximately ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })} Mountain Time.
 "This week" means ${span(weekStart, 6)}. "Next week" means ${span(nextWeekStart, 6)}. Use those exact ranges — do not work them out again — and when a question uses either phrase, name the dates you are answering for so the parent can check you meant the same week they did.
+
+Match the team as written when reading schedule lines: "Junior Titan Volleyball Camp" is not a JH Volleyball practice, "HS- Boys Basketball" is not volleyball, and a tryout or off-season entry is not a regular practice. Inventing a plausible practice time is the worst failure you can make — a parent will drive their child to it.${rangeNote ? `\n\n${rangeNote}` : ''}
 
 ${coverageNote}`,
     },
