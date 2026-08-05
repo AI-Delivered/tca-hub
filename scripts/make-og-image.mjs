@@ -15,21 +15,20 @@
 //   node scripts/make-og-image.mjs
 
 import sharp from 'sharp'
-import { hubMark } from './lib/hub-mark.mjs'
+import { hubMark, PALETTE } from './lib/hub-mark.mjs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const OUT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public/og.png')
 
-const NAVY = '#1a2d5a'
-const NAVY_MID = '#2a4080'
+const { deep: DEEP, navy: NAVY } = PALETTE
 const CRIMSON = '#b91c3a'
 
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="${NAVY}"/>
-      <stop offset="100%" stop-color="${NAVY_MID}"/>
+      <stop offset="0%" stop-color="${DEEP}"/>
+      <stop offset="100%" stop-color="${NAVY}"/>
     </linearGradient>
   </defs>
 

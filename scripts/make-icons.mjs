@@ -13,11 +13,10 @@ import sharp from 'sharp'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { hubMark } from './lib/hub-mark.mjs'
+import { hubMark, PALETTE } from './lib/hub-mark.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const NAVY = '#1a2d5a'
-const NAVY_MID = '#2a4080'
+const { deep: DEEP, navy: NAVY } = PALETTE
 
 /**
  * @param size    output pixels
@@ -34,8 +33,8 @@ function tile(size, { inset = 0.22, radius = 0, scale = 1 } = {}) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="${NAVY}"/>
-      <stop offset="100%" stop-color="${NAVY_MID}"/>
+      <stop offset="0%" stop-color="${DEEP}"/>
+      <stop offset="100%" stop-color="${NAVY}"/>
     </linearGradient>
   </defs>
   <rect width="${size}" height="${size}" rx="${radius}" fill="url(#bg)"/>

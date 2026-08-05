@@ -6,6 +6,18 @@
 // all because every one of those was previously the school's Titans "T",
 // which made an independent tool look like something the school shipped.
 
+/* The app's own colours, read off the running UI rather than picked by eye.
+ * --navy is constant across the light and dark themes, and --bg is what the
+ * dark theme actually renders behind everything; a gradient between the two is
+ * the blue a parent sees in the app. An earlier version ran up to --navy-mid
+ * (#2a4080), which is a brighter blue that appears nowhere prominent and made
+ * the icon look like a different product. */
+export const PALETTE = {
+  deep: '#0a0e1a',      // --bg, dark theme
+  navy: '#1a2d5a',      // --navy, identical in both themes
+  crimson: '#b91c3a',   // --crimson
+}
+
 /**
  * Hub-and-spoke mark, drawn white, centred on (cx, cy).
  *
