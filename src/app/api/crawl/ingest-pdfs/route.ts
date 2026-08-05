@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { sanitizeForPostgres } from '@/lib/ingest-chunks'
 import { normalizeContent } from '@/lib/normalize-content'
+import { looksBinary } from '@/lib/looks-binary'
 import { fetchAllUrls } from '@/lib/page-urls'
 import { withIngestLog } from '@/lib/ingest-log'
 
@@ -501,6 +502,7 @@ async function run(req: NextRequest) {
   // Documents left for a later run rather than stored wrong: `incomplete` ran
   // out of extraction rounds, `deferred` was too big to start this late.
   const incomplete: string[] = []
+  const binarySkipped: string[] = []
   const deferred: string[] = []
 
   /**
@@ -617,6 +619,17 @@ async function run(req: NextRequest) {
 
       if (!content || content.length < 100) { skipped++; return }
 
+      /* A length check was the only gate here, and binary is long. Word
+       * documents fell through the UTF-8 branch above and were embedded as
+       * mojibake — 9.4% of the corpus by the time it was found. Skipping is
+       * right rather than storing a best effort: an unanswerable question is
+       * recoverable, an embedding full of ZIP bytes is retrievable noise. */
+      if (looksBinary(content)) {
+        binarySkipped.push(doc.title || doc.url)
+        console.warn(`ingest-pdfs: content decoded as binary, not storing — ${doc.title} (${doc.url})`)
+        return
+      }
+
       // The link's anchor text, so retrieval and the sources list under an
       // answer show "Central - 2nd Grade Supply List 2026-27" instead of
       // "9b9f4a6c-8b34-41e0-bdcd-35e4b254c8b1".
@@ -688,6 +701,7 @@ async function run(req: NextRequest) {
     // document sitting in the corpus — these are all retried next run.
     incompleteCount: incomplete.length,
     incompleteDocuments: incomplete,
+    binarySkipped,
     deferredAsTooLargeCount: deferred.length,
     deferredAsTooLarge: deferred,
     elapsedMs: Date.now() - startedAt,
