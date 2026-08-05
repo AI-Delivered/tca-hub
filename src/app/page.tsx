@@ -1136,7 +1136,18 @@ export default function Home() {
             Save to iPhone
           </button>
         )}
-        <p>The Classical Academy · Colorado Springs, Colorado</p>
+        {/* This used to read "The Classical Academy · Colorado Springs,
+            Colorado", which is a signature — it made the page look like
+            something the school published. It isn't. An app that answers in
+            the school's voice, cites its pages and carries its name has to say
+            plainly that it is not the school, and that the school wins when
+            the two disagree. */}
+        <p className="tca-disclaimer">
+          An independent tool built by a TCA family. Not affiliated with,
+          endorsed by, or operated by The Classical Academy. Answers come from
+          public TCA sources and can be out of date or wrong — always confirm
+          anything that matters with the school.
+        </p>
       </footer>
     </div>
   )

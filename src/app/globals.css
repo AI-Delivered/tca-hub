@@ -1061,6 +1061,17 @@ body {
   color: var(--text-dim);
 }
 
+/* The unofficial notice. Deliberately legible rather than fine print: it is
+   the one thing on the page a parent has to take at face value, so it gets a
+   readable measure and normal line height instead of being shrunk until it
+   reads as boilerplate to skip. Still quieter than the answers above it. */
+.tca-disclaimer {
+  max-width: 46ch;
+  margin: 0 auto;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
 .tca-a2hs {
   position: fixed;
   bottom: 0;

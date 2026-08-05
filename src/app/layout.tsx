@@ -65,10 +65,17 @@ export const metadata: Metadata = {
     description:
       "Schedules, staff, calendars, dress code and supply lists for TCA — ask a question, get a straight answer with sources.",
     url: SITE_URL,
-    images: [{ url: "/apple-touch-icon.png", width: 180, height: 180, alt: "TCA Hub" }],
+    /* A dedicated card, not the school's Titans "T". A preview carrying the
+       school's logo reads as something the school published — and this is
+       shared parent-to-parent, so the "unofficial" notice is baked into the
+       image itself rather than left on the page nobody opens first. Regenerate
+       with scripts/make-og-image.mjs. */
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: "TCA Hub — unofficial, built by a TCA family" }],
   },
   twitter: {
-    card: "summary",
+    // summary_large_image, not summary: a wide card instead of a thumbnail
+    // beside a bare URL, which is how this lands in a class group chat.
+    card: "summary_large_image",
     title: "TCA Hub — Ask anything about The Classical Academy",
     description: "Schedules, staff, calendars and policies for TCA, answered with sources.",
   },
