@@ -999,10 +999,12 @@ export default function Home() {
               onFocus={() => void preloadSanitizer()}
               placeholder={hasConversation ? 'Ask a follow-up…' : 'Ask anything about TCA…'}
               className="tca-search-input"
+              /* autoComplete stays off so the browser's saved-value dropdown
+                 does not cover the suggestion row. autoCorrect and spellCheck
+                 are left at their defaults on purpose: people type questions
+                 here, and a question full of typos retrieves badly. */
               autoComplete="off"
-              autoCorrect="off"
               autoCapitalize="sentences"
-              spellCheck={false}
               enterKeyHint="search"
               maxLength={500}
               aria-label="Ask a question about TCA"
