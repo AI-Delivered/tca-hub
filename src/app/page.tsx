@@ -516,6 +516,19 @@ function SourcesPanel({ sources }: { sources: Source[] }) {
             return path.length <= 1 ? host : `${host}/${path.slice(0, 2).join('/')}`
           } catch { return source.url }
         })()
+        // Synthetic keys (newsletter://, email://) name a source that has no
+        // page to open — an emailed message, or a document range we assembled.
+        // Rendered as text rather than a link, because a citation that looks
+        // clickable and does nothing reads as a broken app, and a parent who
+        // clicks it learns nothing about where the answer came from.
+        if (!/^https?:\/\//i.test(source.url)) {
+          return (
+            <span key={source.url} className="tca-source-link" aria-disabled="true">
+              <span className="tca-source-num" aria-hidden="true">0{i + 1}</span>
+              <span>{label}</span>
+            </span>
+          )
+        }
         return (
           <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" className="tca-source-link">
             <span className="tca-source-num" aria-hidden="true">0{i + 1}</span>

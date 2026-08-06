@@ -572,6 +572,10 @@ export async function POST(req: NextRequest) {
       'url.ilike.%-calendar%',
       'url.ilike.%tcatitans.org/calendar%',
       'url.ilike.newsletter://%',
+      // School mail that was never published anywhere — for the elementary
+      // campuses and for one-off events like BOOT Camp it is the only source
+      // that has the date at all, so it has to be in the event net.
+      'url.ilike.email://%',
     ]
     const eventRows = await Promise.all(
       eventTerms.slice(0, 2).flatMap(term =>
