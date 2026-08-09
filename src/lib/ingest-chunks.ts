@@ -56,14 +56,78 @@ export function sanitizeForPostgres(text: string): string {
     .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, ' ')
 }
 
+/**
+ * Splits on line boundaries where it can, and only mid-line when a single line
+ * is longer than a chunk.
+ *
+ * This used to slice at exact character offsets, which is fine for prose and
+ * quietly destructive for the schedule documents that make up most of the
+ * corpus. Every event is one line, so a cut landed mid-event and the 200-char
+ * overlap then pasted the tail of one event onto the head of another. The girls
+ * flag football schedule contained, among 92 lines, seven fragments like:
+ *
+ *   [Girls Flag Football Varsity (Girls)] Mon, Sep 14, 2026, 3:30 PM–5:30ep 10, 2026, 7:00
+ *
+ * — a date, a time that belongs to a different game, and an opponent from a
+ * third. That is the raw material for a confidently wrong answer about when a
+ * game is, which is the failure this corpus can least afford: nobody checks a
+ * plausible time, they drive to it.
+ *
+ * Overlap is carried as whole trailing lines rather than a character count, so
+ * the seam between two chunks is always a real event and never half of two.
+ */
 export function chunkText(text: string, chunkSize = CHUNK_SIZE, overlap = CHUNK_OVERLAP): string[] {
-  const chunks: string[] = []
-  let start = 0
-  while (start < text.length) {
-    chunks.push(text.slice(start, start + chunkSize))
-    start += chunkSize - overlap
+  // No newlines to split on — prose, or a single long line. Behaves as before.
+  if (!text.includes('\n')) {
+    if (text.length <= chunkSize) return text.length ? [text] : []
+    const out: string[] = []
+    for (let start = 0; start < text.length; start += chunkSize - overlap) {
+      out.push(text.slice(start, start + chunkSize))
+    }
+    return out
   }
-  return chunks
+
+  const lines = text.split('\n')
+  const chunks: string[] = []
+  let current: string[] = []
+  let size = 0
+
+  const flush = () => {
+    if (!current.length) return
+    chunks.push(current.join('\n'))
+    // Re-open the next chunk with the last whole lines, up to the overlap
+    // budget, so a fact split across the seam is readable from both sides.
+    const carried: string[] = []
+    let carriedSize = 0
+    for (let i = current.length - 1; i >= 0; i--) {
+      if (carriedSize + current[i].length + 1 > overlap) break
+      carried.unshift(current[i])
+      carriedSize += current[i].length + 1
+    }
+    current = carried
+    size = carriedSize
+  }
+
+  for (const line of lines) {
+    // A single line longer than a chunk has to be broken; give it its own
+    // chunks rather than dragging a neighbour's text along with it.
+    if (line.length + 1 > chunkSize) {
+      flush()
+      if (current.length) { chunks.push(current.join('\n')); current = []; size = 0 }
+      for (let start = 0; start < line.length; start += chunkSize - overlap) {
+        chunks.push(line.slice(start, start + chunkSize))
+      }
+      continue
+    }
+    if (size + line.length + 1 > chunkSize) flush()
+    current.push(line)
+    size += line.length + 1
+  }
+  if (current.length) chunks.push(current.join('\n'))
+
+  // Trailing overlap-only chunks add nothing: their every line already appeared
+  // in full in the chunk before them.
+  return chunks.filter((c, i) => i === 0 || !chunks[i - 1].includes(c))
 }
 
 interface VoyageLike {
