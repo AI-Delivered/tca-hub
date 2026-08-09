@@ -146,20 +146,54 @@ async function run(req: NextRequest) {
     return NextResponse.json({ chunksInserted: 0, events: 0, note: 'No events parsed — existing chunks left in place' })
   }
 
-  await supabase.from('page_chunks').delete().ilike('url', `${CHUNK_URL}%`)
+  /* Delete this route's own rows, and nothing else.
+   *
+   * This was `ilike(url, CHUNK_URL + '%')`, and that trailing wildcard reached
+   * a great deal further than intended. ingest-ical stores the GoBound iCal
+   * feed under `…/calendar?v=list#<sport>` — which begins with CHUNK_URL — so
+   * this line deleted it. The crons made that a daily cycle: ingest-ical wrote
+   * 230 correct athletics chunks at 09:00, and at 10:00 this route erased every
+   * one of them and replaced them with the HTML scrape below. Athletics
+   * questions had been answered from the worse of the two sources for as long
+   * as both crons existed, and nothing reported it, because this route's own
+   * insert count looked healthy either way.
+   *
+   * Anchored on `#` (this route's per-sport keys) plus the bare URL (its
+   * whole-schedule chunk), so a sibling route's query string can no longer be
+   * caught by it. */
+  await supabase.from('page_chunks').delete().eq('url', CHUNK_URL)
+  await supabase.from('page_chunks').delete().ilike('url', `${CHUNK_URL}#%`)
 
   let chunksInserted = 0
-  let storeErrors = 0
-  const failedSports: string[] = []
+  const storeErrors = 0
 
-  // Full upcoming schedule chunk
+  /* The sport label is gone, and so are the per-sport chunks below it.
+   *
+   * `e.sport` came from joining a separate `actName` regex pass back onto events
+   * by `date|startDateTime`, keeping the first match for each key. Two sports at
+   * the same date and time therefore shared one label, and the loser inherited
+   * the winner's sport. October 8 has four games at 4 PM across four sports and
+   * August 22 has two at 10 AM, so the corpus ended up asserting that TCA played
+   * Ponderosa, Douglas County and Chinook Trail Middle School at girls flag
+   * football, and filed the real games it displaced under other sports. Asked
+   * for the flag football schedule, the app named 14 dates' worth of season as
+   * six real games plus four fictional ones.
+   *
+   * That join cannot be repaired by tightening the regex: once the passes are
+   * separate, the timestamp is all there is to match on, and it is not unique.
+   * The fix is to stop guessing — GoBound's iCal feed carries
+   * X-BND-ACTIVITYNAME and X-BND-ACTIVITYLEVEL on every event (checked: 99 flag
+   * football events, 99 correct tags, zero disagreement with the summary), and
+   * ingest-ical already groups on those. This route keeps the one thing it does
+   * that the feed path does not — a single flat everything-upcoming view — and
+   * leaves per-sport schedules to the source that knows the sport.
+   */
   const fullLines = [`TCA Athletics & Activities — Upcoming Schedule (as of ${today}):`]
   for (const e of events) {
     const timeStr = `${formatTime(e.startDateTime)}–${formatTime(e.endDateTime)}`
-    const sport = e.sport ? ` [${e.sport}]` : ''
     const loc = e.location ? ` @ ${e.location}` : ''
     const cancelled = e.cancelled ? ' [CANCELLED]' : ''
-    fullLines.push(`${e.date} ${timeStr} — ${e.name}${sport}${loc}${cancelled}`)
+    fullLines.push(`${e.date} ${timeStr} — ${e.name}${loc}${cancelled}`)
   }
 
   try {
@@ -181,52 +215,23 @@ async function run(req: NextRequest) {
     console.error('Full schedule chunk error:', e)
   }
 
-  // Per-sport chunks for targeted queries
-  const groups = new Map<string, CalendarEvent[]>()
-  for (const e of events) {
-    const key = e.sport || e.name.replace(/^(HS-|JH-)\s*/i, '').replace(/\s*(Off.Season|Practice|Camp|Scrimmage).*/i, '').trim() || 'General'
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key)!.push(e)
-  }
-
-  for (const [sport, sportEvents] of groups) {
-    const lines = [`TCA ${sport} — Upcoming Events:`]
-    for (const e of sportEvents) {
-      const timeStr = `${formatTime(e.startDateTime)}–${formatTime(e.endDateTime)}`
-      const loc = e.location ? ` @ ${e.location}` : ''
-      const cancelled = e.cancelled ? ' [CANCELLED]' : ''
-      lines.push(`${e.date} ${timeStr} — ${e.name}${loc}${cancelled}`)
-    }
-    const content = lines.join('\n')
-    const chunkUrl = `${CHUNK_URL}#${sport.toLowerCase().replace(/\s+/g, '-')}`
-
-    try {
-      const stored = await storeChunks(
-        supabase,
-        voyage,
-        { url: chunkUrl, title: `TCA ${sport} Schedule`, content },
-        now
-      )
-      chunksInserted += stored.inserted
-      storeErrors += stored.errors
-    } catch (e) {
-      /* This was `catch { /* continue *\/ }` — no counter, no log, and no
-       * `errors` field on the response. A sport whose schedule failed to store
-       * looked exactly like a sport with no events on the calendar, and the
-       * route reported chunksInserted and moved on. If every sport had failed
-       * it would have returned zero and read as an empty week.
-       */
-      failedSports.push(sport)
-      console.error(`ingest-calendar: storing ${sport} failed:`, e instanceof Error ? e.message : e)
-    }
-  }
+  /* Per-sport chunks used to be built here, keyed on the unreliable `e.sport`
+   * described above (and, where that was empty, on the event name with
+   * "Practice"/"Camp"/"Scrimmage" stripped — which is how a picture day and a
+   * homecoming dance each became a "sport" with its own schedule document).
+   * ingest-ical builds these from the feed's own activity and level tags
+   * instead. Removed rather than left behind a flag, because two sources
+   * disagreeing about who TCA plays is worse than one source being incomplete,
+   * and the stale rows are cleared by the anchored delete above. */
 
   return NextResponse.json({
     chunksInserted,
     events: events.length,
-    sports: groups.size,
+    // `sports` and `failedSports` are gone with the per-sport chunks. Reported
+    // as a note so a dashboard row that suddenly counts one chunk family
+    // instead of ninety-eight reads as intentional rather than as breakage.
+    note: 'per-sport schedules now come from ingest-ical (feed activity tags)',
     storeErrors,
-    failedSports,
   })
 }
 
