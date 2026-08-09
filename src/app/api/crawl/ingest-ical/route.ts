@@ -171,17 +171,36 @@ function formatTimeOnly(dtstr: string): string {
   return d.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })
 }
 
+/* One date format across every source: `YYYY-MM-DD (Ddd) h:mm AM`.
+ *
+ * This used to emit `Thu, Aug 20, 2026, 6:00 PM`, and two things went wrong.
+ *
+ * The search route filters context to an asked-about week in code — the fix for
+ * a model that resolved "next week" to the wrong seven days — and that filter
+ * matches lines beginning `YYYY-MM-DD`. Athletics schedules written in the
+ * `Thu, Aug 20` form were invisible to it, so a computed week list built from
+ * them was silently short while still being handed over labelled COMPLETE. The
+ * ISO prefix is what makes a line eligible for that filter at all.
+ *
+ * The weekday stays, in parentheses, because the model was deriving it and
+ * getting it wrong: asked for the flag football schedule it called Saturday
+ * August 15 and Saturday October 10 "Friday". A day name is cheap to write here
+ * and it is one less thing computed at answer time.
+ */
 function formatDate(dtstr: string): string {
   const isUtc = dtstr.endsWith('Z')
   const clean = dtstr.replace(/Z$/, '')
+  const iso = (d: Date, tz: string) => {
+    const ymd = d.toLocaleDateString('en-CA', { timeZone: tz })
+    const dow = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: tz })
+    return `${ymd} (${dow})`
+  }
   const m = clean.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/)
   if (!m) {
     // All-day: YYYYMMDD — parse as UTC to avoid timezone shifting the date
     const d = clean.match(/(\d{4})(\d{2})(\d{2})/)
     if (!d) return dtstr
-    return new Date(`${d[1]}-${d[2]}-${d[3]}T00:00:00Z`).toLocaleDateString('en-US', {
-      weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
-    })
+    return iso(new Date(`${d[1]}-${d[2]}-${d[3]}T00:00:00Z`), 'UTC')
   }
   const [, year, month, day, hour, minute] = m
   let date: Date
@@ -194,10 +213,10 @@ function formatDate(dtstr: string): string {
     date = new Date(`${year}-${month}-${day}T${hour}:${minute}:00${offset}`)
   }
   if (isNaN(date.getTime())) return dtstr
-  return date.toLocaleString('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+  const time = date.toLocaleString('en-US', {
     hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver',
   })
+  return `${iso(date, 'America/Denver')} ${time}`
 }
 
 function parseDate(dtstr: string): Date {
