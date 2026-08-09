@@ -576,6 +576,10 @@ export async function POST(req: NextRequest) {
       // campuses and for one-off events like BOOT Camp it is the only source
       // that has the date at all, so it has to be in the event net.
       'url.ilike.email://%',
+      // Campus newsletters live on Smore, not on tcatitans.org. "Upcoming
+      // Events" in a weekly newsletter is often the only record of a carnival
+      // or a Meet and Greet, so these belong in the same net.
+      'url.ilike.%smore.com%',
     ]
     const eventRows = await Promise.all(
       eventTerms.slice(0, 2).flatMap(term =>
@@ -1230,14 +1234,27 @@ Answer style:
    * with eight events — which is what the first version of this did to "what
    * is happening today at TCA". Absence from the retrieved context is not
    * absence from the schedule. */
-  const contextHasSchedule = /^\d{4}-\d{2}-\d{2}/m.test(context)
+  /* The date is found anywhere in the line, not only at its start.
+   *
+   * This used to be anchored with `^`, which silently excluded every athletics
+   * schedule from the ical path — those lines lead with their level, as in
+   * `[Volleyball Varsity (Girls)] 2026-08-20 (Thu) 6:00 PM: …`. The list built
+   * below was therefore short of exactly the events a sports question is about,
+   * and was handed to the model labelled COMPLETE regardless. A closed list is
+   * only safe if it is actually closed; an anchor that depends on which route
+   * wrote the line is not a safe way to build one.
+   *
+   * A line needs a time as well as a date to count as an event, which keeps
+   * prose that merely mentions a date out of a list asserted to be exhaustive. */
+  const DATED_LINE = /(\d{4}-\d{2}-\d{2})(?=.*\d{1,2}:\d{2})/
+  const contextHasSchedule = /\d{4}-\d{2}-\d{2}/.test(context)
   if (askedRange && contextHasSchedule) {
     const [from, to] = RANGES[askedRange]()
     const lo = ymd(from), hi = ymd(to)
     const inRange = [...new Set(
       context.split('\n')
         .map(l => l.trim())
-        .filter(l => { const d = l.match(/^(\d{4}-\d{2}-\d{2})/)?.[1]; return d !== undefined && d >= lo && d <= hi })
+        .filter(l => { const d = l.match(DATED_LINE)?.[1]; return d !== undefined && d >= lo && d <= hi })
     )].sort()
 
     const label = `${askedRange} (${lo} to ${hi})`
@@ -1245,6 +1262,73 @@ Answer style:
       // Capped so a busy week cannot crowd out the retrieved pages themselves.
       ? `Dated events in your context for ${label} — this list was computed from that context and is COMPLETE:\n${inRange.slice(0, 60).join('\n')}\n\nAnswer only from these lines. If the team or activity the parent asked about does not appear above, then nothing is scheduled for it in that range and you must say so plainly. Never move an event from another week onto these dates, and never combine a date from this list with a time from elsewhere.`
       : `The schedule data you were given contains NO events for ${label}. Say plainly that nothing is listed for that period in the schedules you can see. Do not construct an event for it from a recurring pattern in another week — if you name the next scheduled dates instead, label them with the week they are actually in.`
+  }
+
+  /* "The next game", worked out here rather than left to the model.
+   *
+   * Asked "when is the next volleyball game" on 9 August, the app answered
+   * 1 September. The real answer was 20 August — Palmer Ridge, at all three
+   * levels — and every one of those lines was in the retrieved context. This is
+   * the same failure as the flag football schedule reported as four games out of
+   * fourteen: given a long list spread across several level documents, the model
+   * does not reliably scan it and pick a minimum. It reads a few lines and
+   * answers from those.
+   *
+   * Sorting is not a judgement call, so it does not belong in the prompt. The
+   * earliest upcoming dated line wins, computed per level so a question about a
+   * sport with a Varsity, JV, C-Squad, A and B team gets the next game for each
+   * rather than one arbitrary team's.
+   *
+   * Deliberately narrow: it fires only when the parent asked for the *next*
+   * one. A request for the whole schedule still goes to the model, because
+   * "everything, in order" is what the context already is.
+   */
+  /* A game and a practice are different questions, and the first version of
+   * this did not ask which one had been put to it. Asked for the next volleyball
+   * game it computed the next volleyball *event* per level, which for Varsity
+   * was a tryout eleven days before the first match — so it handed the model a
+   * practice, labelled as the answer, and the model went around it and invented
+   * a date of its own. A computed note is only worth having if it computes the
+   * thing that was asked for. */
+  const GAME_LINE = / vs /i
+  /* Word-anchored, because these patterns are tested against lines that name a
+   * venue. Unanchored `camp` matches "The Classical Academy North Campus" — the
+   * location of most home fixtures — so every home game was classified as a
+   * practice and dropped from the games list, which is why the first cut of this
+   * still could not find the 20 August volleyball match. */
+  const PRACTICE_LINE = /\b(practice|tryouts?|scrimmage|weights|open gym|camps?|conditioning)\b/i
+  const asksPractice = /\b(practice|tryout|scrimmage|weights|conditioning|training)\b/i.test(query)
+  const asksGame = /\b(game|match|meet|contest|competition|tournament)\b/i.test(query)
+  const NEXT_RE = /\bnext\b/i
+  let nextNote = ''
+  if (NEXT_RE.test(query) && (asksGame || asksPractice) && contextHasSchedule) {
+    const todayYmd = ymd(denverToday)
+    const wanted = (line: string) =>
+      asksPractice ? PRACTICE_LINE.test(line) : GAME_LINE.test(line) && !PRACTICE_LINE.test(line)
+    // Level tag as written by ingest-ical (`[Volleyball Varsity (Girls)] …`).
+    // Untagged lines are skipped here rather than pooled: without a level there
+    // is nothing to report a "next" *for*, and they crowd out the tagged ones.
+    const byLevel = new Map<string, { date: string; line: string }>()
+    for (const raw of context.split('\n')) {
+      const line = raw.trim()
+      const date = line.match(DATED_LINE)?.[1]
+      const level = line.match(/^\[([^\]]+)\]/)?.[1]
+      if (!date || !level || date < todayYmd || !wanted(line)) continue
+      const prev = byLevel.get(level)
+      if (!prev || date < prev.date) byLevel.set(level, { date, line })
+    }
+    if (byLevel.size) {
+      const kind = asksPractice ? 'practice/training session' : 'game or competition'
+      const soonest = [...byLevel.entries()]
+        .sort((a, b) => a[1].date.localeCompare(b[1].date))
+        .slice(0, 12)
+      nextNote =
+        `Earliest upcoming ${kind} per team/level, computed from your context by date (today is ${todayYmd}). ` +
+        `These ARE the next ones — do not name a later date as "next", and do not answer with a date that is not on this list:\n` +
+        soonest.map(([, v]) => v.line).join('\n') +
+        `\n\nEach line already states its own day of the week in parentheses. Use it as written; do not work the weekday out yourself. ` +
+        `Answer for the team and level the parent asked about — if they named no level and several appear above, give each briefly.`
+    }
   }
 
   /* Which teams have a TeamReach feed connected.
@@ -1299,7 +1383,7 @@ Athletics data provenance: game and competition schedules come from GoBound, whi
       text: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current time is approximately ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })} Mountain Time.
 "This week" means ${span(weekStart, 6)}. "Next week" means ${span(nextWeekStart, 6)}. Use those exact ranges — do not work them out again — and when a question uses either phrase, name the dates you are answering for so the parent can check you meant the same week they did.
 
-Match the team as written when reading schedule lines: "Junior Titan Volleyball Camp" is not a JH Volleyball practice, "HS- Boys Basketball" is not volleyball, and a tryout or off-season entry is not a regular practice. Inventing a plausible practice time is the worst failure you can make — a parent will drive their child to it.${rangeNote ? `\n\n${rangeNote}` : ''}
+Match the team as written when reading schedule lines: "Junior Titan Volleyball Camp" is not a JH Volleyball practice, "HS- Boys Basketball" is not volleyball, and a tryout or off-season entry is not a regular practice. Inventing a plausible practice time is the worst failure you can make — a parent will drive their child to it.${rangeNote ? `\n\n${rangeNote}` : ''}${nextNote ? `\n\n${nextNote}` : ''}
 
 ${coverageNote}`,
     },
