@@ -190,9 +190,18 @@ function formatTimeOnly(dtstr: string): string {
 function formatDate(dtstr: string): string {
   const isUtc = dtstr.endsWith('Z')
   const clean = dtstr.replace(/Z$/, '')
+  /* The day is spelled out in full, not abbreviated.
+   *
+   * `(Thu)` was not enough. Given `2026-08-20 (Thu)` the model still wrote
+   * "Saturday, August 20" in one phrasing and "Tuesday, August 20 (Thu)" in
+   * another — it expands the abbreviation into prose and expands it wrongly, and
+   * a prompt instruction to use the parenthetical as written did not hold. With
+   * "Thursday" already in the line there is nothing to expand: the word the
+   * answer needs is the word that is there. Five characters per event to remove
+   * a class of error that puts a parent at a field on the wrong day. */
   const iso = (d: Date, tz: string) => {
     const ymd = d.toLocaleDateString('en-CA', { timeZone: tz })
-    const dow = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: tz })
+    const dow = d.toLocaleDateString('en-US', { weekday: 'long', timeZone: tz })
     return `${ymd} (${dow})`
   }
   const m = clean.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/)
