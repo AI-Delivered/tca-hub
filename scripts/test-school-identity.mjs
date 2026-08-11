@@ -35,14 +35,35 @@ Picture Day is Tuesday, September 8. Go Titans!`
 console.log('\n— what identifies this school —\n')
 
 checkTrue('its own name', identifiesSchool(TCA_CENTRAL).identified)
-check('and that is what settled it', identifiesSchool(TCA_CENTRAL).matched, [
-  "the school's name", 'a TCA mailbox on the district domain',
+check('and every marker it carries is reported', identifiesSchool(TCA_CENTRAL).matched, [
+  "the school's name",
+  'a TCA mailbox on the district domain',
+  'the initials TCA attached to one of its own campuses or programs',
 ])
 checkTrue('its web domain on its own', identifiesSchool('Read more at www.tcatitans.org/calendar').identified)
 checkTrue('a TCA mailbox on the district domain', identifiesSchool('email tcanorth@asd20.org').identified)
 check('nothing to raise, since it was identified', identifiesSchool(TCA_CENTRAL).ambiguous, [])
 
+/* TCA is an ASD20 charter, so its own newsletters carry district addresses and may
+ * never expand the initials. This one is unmistakably TCA's to a reader, and the
+ * first version of this check turned it away. */
+const TCA_JH = `TCA Junior High Weekly — 8/10/26
+Questions? frontoffice@asd20.org. Go Titans!
+Picture Day is Thursday, August 27 in the gym.`
+checkTrue('a TCA campus newsletter with only district contact details', identifiesSchool(TCA_JH).identified)
+check('and it is the campus phrase that settles it', identifiesSchool(TCA_JH).matched,
+  ['the initials TCA attached to one of its own campuses or programs'])
+checkTrue('TCA Central, without the word Elementary', identifiesSchool('TCA Central Newsletter, week of 8/8').identified)
+checkTrue('a program only this school runs', identifiesSchool('TCA College Pathways update').identified)
+
 console.log('\n— what does not —\n')
+
+/* The reason the campus phrase has to be a phrase. A rival's athletics newsletter
+ * reporting a game against TCA has both halves on the page and is not TCA's. */
+checkTrue('a rival newsletter mentioning a game against TCA',
+  !identifiesSchool('Academy High School news: Friday our varsity travels to play TCA. Go Titans!').identified)
+checkTrue('the initials loose on the page with a generic campus word',
+  !identifiesSchool('High school families: tickets for the TCA game are on sale at the front office.').identified)
 
 /* The whole point. Every marker in this newsletter reads as confirmation to
  * someone skimming, and every one of them is shared with the school next door. */

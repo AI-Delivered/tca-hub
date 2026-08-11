@@ -29,6 +29,24 @@ const TCA_MARKERS: Array<{ what: string; re: RegExp }> = [
   { what: 'a TCA mailbox on the district domain', re: /\btca[a-z0-9._-]*@asd20\.org\b/i },
 ]
 
+/* TCA is an ASD20 charter, so its own newsletters carry district addresses — and
+ * the first version of this refused any page that named nothing but those.
+ *
+ * That is a false refusal waiting to happen. A campus newsletter headed "TCA
+ * Junior High" with a frontoffice@asd20.org contact and no expansion of the
+ * initials anywhere is unmistakably this school's to a reader, and would have been
+ * turned away. So the initials count after all — but only where they are attached
+ * to one of this school's own campuses or programs.
+ *
+ * Attached, not merely both present somewhere on the page. "TCA" anywhere plus
+ * "high school" anywhere is satisfied by a rival's athletics newsletter reporting
+ * a game against TCA, which is the exact class of page this guard exists to keep
+ * out. "TCA Junior High" and "TCA Central" are names; two words in the same
+ * newsletter are a coincidence.
+ */
+const TCA_CAMPUS_PHRASE =
+  /\bTCA['’]?s?\s+(?:central|east|north|junior\s+high|jh\b|high\s+school|hs\b|college\s+pathways|cottage\s+school)/i
+
 /* Names TCA shares with its neighbours, which is precisely why they do not count.
  *
  * Kept as a list rather than dropped, so a refusal can say what it *did* find —
@@ -53,6 +71,9 @@ export interface SchoolIdentity {
 /** Whether some fetched text identifies itself as belonging to TCA. */
 export function identifiesSchool(text: string): SchoolIdentity {
   const matched = TCA_MARKERS.filter(m => m.re.test(text)).map(m => m.what)
+  if (TCA_CAMPUS_PHRASE.test(text)) {
+    matched.push('the initials TCA attached to one of its own campuses or programs')
+  }
   return {
     identified: matched.length > 0,
     matched,
