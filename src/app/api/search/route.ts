@@ -1058,7 +1058,32 @@ export async function POST(req: NextRequest) {
   // routes that write these lines have to be checkable against the same rule.
   // `isGame`/`isPractice` moved alongside it for the same reason.
   const asksPractice = NEXT_KIND.practice.test(query)
-  const asksNext = /\bnext\b/i.test(query) && (asksPractice || NEXT_KIND.game.test(query))
+
+  /* Two conditions this trigger got wrong, both found on production.
+   *
+   * It required a noun. "When does the boys soccer team play next" has none, so
+   * none of this fired and the answer was Varsity 10 September when the team
+   * plays on 25 August — while "their next match" answered correctly. A parent
+   * asking in the most natural way got the one wrong answer. Verb phrasings are
+   * now recognised too: play/plays/playing next, play again, next up.
+   *
+   * And it fired alongside a week question. "What volleyball games are on next
+   * week" contains both "next" and "games", so the earliest-per-level filter ran
+   * on a question about a range and cut the rest of that week out of the
+   * context — production answered "next week has no volleyball games scheduled"
+   * with three levels playing Palmer Ridge on 20 August, inside the range it had
+   * just named. A false negative on a schedule question is the worst outcome
+   * available here: a parent who is told there is nothing on does not look again.
+   *
+   * A named range wins. "Next week" is a question about a week, and the week
+   * filter below already answers it from the whole schedule; only one of the two
+   * rules may rewrite the context, or they subtract from each other. */
+  const RANGE_WORDS = /\b(today|tonight|tomorrow|this week|next week|this weekend|next weekend|this month)\b/i
+  const asksNextEvent = /\bnext\b/i.test(query) && (asksPractice || NEXT_KIND.game.test(query))
+  const asksPlayNext =
+    /\b(play|plays|playing|compete|competes)\b[^.?]{0,20}\b(next|again)\b/i.test(query) ||
+    /\bnext\s+(one|up)\b/i.test(query)
+  const asksNext = (asksNextEvent || asksPlayNext) && !RANGE_WORDS.test(query)
   const todayYmd = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
 
   let answerContext = context
@@ -1462,12 +1487,30 @@ Answer style:
    * `DATED_LINE` is the one defined with the next-game filter above — both rules
    * have to agree on what counts as an event, or one of them builds a "complete"
    * list from a different set of lines than the other can see. */
-  const contextHasSchedule = /\d{4}-\d{2}-\d{2}/.test(context)
+  /* Built from the whole schedule where there is one, not from what retrieval
+   * returned — the same correction the "next game" filter already had, applied
+   * to the rule that needs it more.
+   *
+   * This read `context`, and so it inherited retrieval's gaps while telling the
+   * model the result was COMPLETE. Measured on production: "what volleyball
+   * games are on next week" answered "next week (August 17-23) has no volleyball
+   * games scheduled" while three levels played Palmer Ridge on 20 August, inside
+   * the range it had just named. The chunk holding those lines had not been
+   * retrieved, the list came back empty, and the empty branch below turned that
+   * into a flat denial.
+   *
+   * That is the worst failure mode this app has. A wrong time gets checked; a
+   * parent told there is nothing on does not look again. So the list comes from
+   * `scheduleText` when the athletics documents are behind the question, and the
+   * denial is only stated as a fact when it was computed from them. */
+  const rangeComplete = Boolean(scheduleText.trim())
+  const rangeSource = rangeComplete ? scheduleText : context
+  const contextHasSchedule = /\d{4}-\d{2}-\d{2}/.test(rangeSource)
   if (askedRange && contextHasSchedule) {
     const [from, to] = RANGES[askedRange]()
     const lo = ymd(from), hi = ymd(to)
     const inRange = [...new Set(
-      context.split('\n')
+      rangeSource.split('\n')
         .map(l => l.trim())
         .filter(l => { const d = l.match(DATED_LINE)?.[1]; return d !== undefined && d >= lo && d <= hi })
     )].sort()
@@ -1475,8 +1518,11 @@ Answer style:
     const label = `${askedRange} (${lo} to ${hi})`
     rangeNote = inRange.length
       // Capped so a busy week cannot crowd out the retrieved pages themselves.
-      ? `Dated events in your context for ${label} — this list was computed from that context and is COMPLETE:\n${inRange.slice(0, 60).join('\n')}\n\nAnswer only from these lines. If the team or activity the parent asked about does not appear above, then nothing is scheduled for it in that range and you must say so plainly. Never move an event from another week onto these dates, and never combine a date from this list with a time from elsewhere.`
-      : `The schedule data you were given contains NO events for ${label}. Say plainly that nothing is listed for that period in the schedules you can see. Do not construct an event for it from a recurring pattern in another week — if you name the next scheduled dates instead, label them with the week they are actually in.`
+      ? `Dated events for ${label}, computed from ${rangeComplete ? 'the complete schedule for the activity asked about' : 'your context'}${rangeComplete ? ' and COMPLETE' : ''}:\n${inRange.slice(0, 60).join('\n')}\n\nAnswer only from these lines. If the team or activity the parent asked about does not appear above, then nothing is scheduled for it in that range and you must say so plainly. Never move an event from another week onto these dates, and never combine a date from this list with a time from elsewhere.`
+      : rangeComplete
+        // Only assertable because the whole schedule was searched, not a slice.
+        ? `The complete schedule for the activity asked about contains NO events for ${label}. Say plainly that nothing is listed for that period. Do not construct an event for it from a recurring pattern in another week — if you name the next scheduled dates instead, label them with the week they are actually in.`
+        : `No events for ${label} appear in the pages you were given, but those pages are not the whole schedule, so this is not evidence that nothing is on. Say that you cannot see anything listed for that period and point to the schedule rather than stating that the period is empty.`
   }
 
   /* The day of the week for every date the model can see, computed here.
