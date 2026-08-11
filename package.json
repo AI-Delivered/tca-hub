@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node scripts/test-markdown.mjs && node scripts/test-denial-judge.mjs"
+    "test": "node scripts/test-markdown.mjs && node scripts/test-schedule-dates.mjs && node scripts/test-denial-judge.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.4",

@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { storeChunks } from '@/lib/ingest-chunks'
 import { withIngestLog } from '@/lib/ingest-log'
+import { scheduleLine } from '@/lib/schedule-dates'
 
 export const maxDuration = 300
 
@@ -55,13 +56,22 @@ interface CalendarEvent {
   sport: string
 }
 
-function formatTime(iso: string): string {
-  const [, timePart] = iso.split('T')
-  const [h, m] = timePart.split(':').map(Number)
-  const ampm = h >= 12 ? 'PM' : 'AM'
-  const hour = h % 12 || 12
-  return m === 0 ? `${hour} ${ampm}` : `${hour}:${m.toString().padStart(2, '0')} ${ampm}`
-}
+/* Times and day names are formatted by src/lib/schedule-dates.ts now, which is
+ * also where the search route's DATED_LINE lives, so a line written here and the
+ * filters that read it cannot drift apart. This route used to have its own
+ * formatter, and it differed from every other source in two ways that mattered:
+ *
+ *   It wrote no day of the week. ingest-ical spells one out on every line
+ *   precisely because the model derives them wrongly, and this route feeds the
+ *   "TCA Athletics & Activities — Upcoming Schedule" chunk that the search route
+ *   pins at 0.90 for calendar questions — which is how "JH Picture Day" came back
+ *   as a Thursday when 2026-08-28 is a Friday.
+ *
+ *   It wrote `4 PM` rather than `4:00 PM` on the hour, and DATED_LINE needs an
+ *   `h:mm` after the date to count a line as an event at all. Most school events
+ *   start on the hour, so most of this chunk was invisible to both the "next
+ *   game" filter and the week list handed over labelled COMPLETE.
+ */
 
 function parseCalendar(html: string): CalendarEvent[] {
   const seen = new Set<string>()
@@ -189,12 +199,7 @@ async function run(req: NextRequest) {
    * leaves per-sport schedules to the source that knows the sport.
    */
   const fullLines = [`TCA Athletics & Activities — Upcoming Schedule (as of ${today}):`]
-  for (const e of events) {
-    const timeStr = `${formatTime(e.startDateTime)}–${formatTime(e.endDateTime)}`
-    const loc = e.location ? ` @ ${e.location}` : ''
-    const cancelled = e.cancelled ? ' [CANCELLED]' : ''
-    fullLines.push(`${e.date} ${timeStr} — ${e.name}${loc}${cancelled}`)
-  }
+  for (const e of events) fullLines.push(scheduleLine(e))
 
   try {
     // Was truncated to 16,000 characters outright — the whole-schedule chunk

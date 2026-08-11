@@ -5,6 +5,7 @@ import { queryKey } from '@/lib/query-key'
 import { logQuery } from '@/lib/query-log'
 import { rateLimit, tooManyRequests } from '@/lib/rate-limit'
 import { secretMatches } from '@/lib/auth'
+import { DATED_LINE, weekdayNote } from '@/lib/schedule-dates'
 
 export const maxDuration = 60
 
@@ -996,11 +997,8 @@ export async function POST(req: NextRequest) {
    * dropped. Anchoring is what makes the August 20 volleyball match findable. */
   const IS_PRACTICE = /\b(practice|tryouts?|scrimmage|weights|open gym|camps?|conditioning)\b/i
   const IS_GAME = / vs /i
-  /* A date plus a time, anywhere in the line, is what makes it an event.
-   * Requiring the date at the start excluded every ical schedule, which leads
-   * with its level: `[Volleyball Varsity (Girls)] 2026-08-20 (Thu) 6:00 PM`. */
-  const DATED_LINE = /(\d{4}-\d{2}-\d{2})(?=.*\d{1,2}:\d{2})/
-
+  // What counts as a dated event — `DATED_LINE`, imported, because the ingest
+  // routes that write these lines have to be checkable against the same rule.
   const asksPractice = NEXT_KIND.practice.test(query)
   const asksNext = /\bnext\b/i.test(query) && (asksPractice || NEXT_KIND.game.test(query))
   const todayYmd = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
@@ -1245,6 +1243,8 @@ Be smart about context: sports (football, basketball, soccer, wrestling, cheer, 
 
 Current school year is ${schoolYearLabel}. A date is "past" only if it is before TODAY's date — today's events are current and valid to cite regardless of month. Never dismiss July or August events as "summer break" — TCA runs athletics, camps, and activities year-round including summer. If you only have a past date for a recurring annual event, say "Last year it was [date] — the ${schoolYearLabel} date hasn't been posted yet." Never call a future date "already passed."
 
+Days of the week are given to you, never worked out. A schedule line spells its day out in parentheses — \`2026-08-28 (Friday) 8:00 AM–10:00 AM — JH Picture Day\` — and where the context contains dates you are also handed a computed list pairing each date with the day it falls on. Use those words exactly. Never derive a day name from a date yourself, and never carry one across from a neighbouring event. If a date has no day name in the line and none in that list, give the date on its own — "August 28", not "Thursday, August 28". An omitted day name costs a parent nothing; a wrong one puts their child at school on the wrong morning.
+
 Calendar data is authoritative: if the calendar context includes a month's events and a specific date in that month is NOT listed as a closure, no-school day, or break, then school IS in session on that date. You do not need to say "I'm not sure" — if you have the month's data and the date isn't listed as a closure, confidently say school is in session. Only express uncertainty if you don't have that month's calendar data at all.
 
 Sports schedule accuracy rule: The schedule data comes from two sources. GoBound ("TCA Athletics — …" chunks) carries games, meets and competitions, and now also carries practices for many teams. TeamReach ("TCA HS Football — …", "TCA JH Football — …" chunks) is a coach's own feed, connected for a few teams only, and carries practices, weights and training in more detail. Rules:
@@ -1388,6 +1388,14 @@ Answer style:
       : `The schedule data you were given contains NO events for ${label}. Say plainly that nothing is listed for that period in the schedules you can see. Do not construct an event for it from a recurring pattern in another week — if you name the next scheduled dates instead, label them with the week they are actually in.`
   }
 
+  /* The day of the week for every date the model can see, computed here.
+   *
+   * Built from `answerContext` rather than `context`, for the same reason the
+   * "next game" filter rewrites it: a date removed from the context must not
+   * reappear in a note attached to it, or the filter has handed the model back
+   * the later dates it just took away. */
+  const dowNote = weekdayNote(answerContext)
+
   /* Which teams have a TeamReach feed connected.
    *
    * TeamReach groups are joined with a per-team code, so the only feeds we can
@@ -1440,7 +1448,7 @@ Athletics data provenance: game and competition schedules come from GoBound, whi
       text: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current time is approximately ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })} Mountain Time.
 "This week" means ${span(weekStart, 6)}. "Next week" means ${span(nextWeekStart, 6)}. Use those exact ranges — do not work them out again — and when a question uses either phrase, name the dates you are answering for so the parent can check you meant the same week they did.
 
-Match the team as written when reading schedule lines: "Junior Titan Volleyball Camp" is not a JH Volleyball practice, "HS- Boys Basketball" is not volleyball, and a tryout or off-season entry is not a regular practice. Inventing a plausible practice time is the worst failure you can make — a parent will drive their child to it.${rangeNote ? `\n\n${rangeNote}` : ''}${nextNote ? `\n\n${nextNote}` : ''}
+Match the team as written when reading schedule lines: "Junior Titan Volleyball Camp" is not a JH Volleyball practice, "HS- Boys Basketball" is not volleyball, and a tryout or off-season entry is not a regular practice. Inventing a plausible practice time is the worst failure you can make — a parent will drive their child to it.${dowNote ? `\n\n${dowNote}` : ''}${rangeNote ? `\n\n${rangeNote}` : ''}${nextNote ? `\n\n${nextNote}` : ''}
 
 ${coverageNote}`,
     },
