@@ -368,6 +368,29 @@ function resolveYear(month: number, day: number, today: string, contextDates: Se
 
 const MONTH_INDEX_LONG = new Map(MONTHS.map((name, i) => [name.slice(0, 3).toLowerCase(), i]))
 
+/* Every date an answer names, resolved — including the ones with no year on them.
+ *
+ * `datesIn` deliberately ignores a bare "August 20", because in *source* text the
+ * year is a guess and guessing it wrongly invents a weekday. In an answer the
+ * calculation is different: the answer is about now, and the reason to read its
+ * dates is to compare two runs of the same question. "August 20" one run and
+ * "September 1" the next is the failure that started this — and it is invisible to
+ * an extractor that skips both of them.
+ *
+ * Used by scripts/check-answers.mjs to assert an answer says the same thing twice.
+ */
+export function datesNamedIn(text: string, today: string): string[] {
+  const found = new Set(datesIn(text).map(d => d.ymd))
+  for (const m of text.matchAll(ANSWER_DATE)) {
+    const monthIndex = MONTH_INDEX_LONG.get(String(m[3]).slice(0, 3).toLowerCase())
+    if (monthIndex === undefined) continue
+    const year = m[6] ? Number(m[6]) : resolveYear(monthIndex + 1, Number(m[4]), today, found)
+    const ymd = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(Number(m[4])).padStart(2, '0')}`
+    if (weekdayFor(ymd)) found.add(ymd)
+  }
+  return [...found].sort()
+}
+
 /** Resolve every day/date pair in an answer against the calendar. */
 export function checkAnswerDates(
   text: string,

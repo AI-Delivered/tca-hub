@@ -11,7 +11,7 @@
 // arbitrary chunk boundary at a time, since the answer is already on its way to
 // the browser while it is being checked.
 
-import { checkAnswerDates, heldBackFrom } from '../src/lib/schedule.ts'
+import { checkAnswerDates, heldBackFrom, datesNamedIn } from '../src/lib/schedule.ts'
 
 let failures = 0
 const check = (name, actual, expected) => {
@@ -143,6 +143,23 @@ checkTrue('the holdback never drops or repeats a character', SAMPLES.every(sampl
 check('nothing is held back with no day name in sight', heldBackFrom('The office opens at 7:30 AM.'), 28)
 check('a trailing partial day name is held', heldBackFrom('The game is on Thurs'), 15)
 check('a completed phrase is not held forever', heldBackFrom('Thursday, August 28, 2026 at the JH, in the gym.'), 48)
+
+console.log('\n— datesNamedIn: comparing two runs of one question —\n')
+
+/* What scripts/check-answers.mjs compares across runs. A bare "August 20" has to
+ * resolve, or the one failure this is for — 20 August one run, 1 September the
+ * next — is invisible to it. */
+const named = (t) => datesNamedIn(t, TODAY)
+check('a year-less date resolves', named('The next game is Thursday, August 20 at 6:00 PM.'), ['2026-08-20'])
+check('an explicit year is used as given', named('Picture Day is Friday, August 28, 2026.'), ['2026-08-28'])
+check('an ISO line is read too', named('2026-09-26 6:00 PM — Homecoming Dance'), ['2026-09-26'])
+check('two runs of the same question are comparable',
+  [named('The next game is Thursday, August 20.').join(), named('The next game is Tuesday, September 1.').join()],
+  ['2026-08-20', '2026-09-01'])
+check('the same answer twice is identical',
+  named('The next game is Thursday, August 20.').join(), named('the next game is thursday, august 20').join())
+check('no dates, nothing to compare', named('The JH principal is Mr. Walters.'), [])
+check('an impossible date is not named', named('February 30, 2026'), [])
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all passed'}\n`)
 process.exit(failures ? 1 : 0)

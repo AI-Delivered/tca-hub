@@ -16,8 +16,26 @@
 // specific — "3:00" rather than "the right time" — so a pass means the answer
 // carried the fact, not that it sounded plausible.
 
+// Two of the checks below need no known answer at all, and they are the ones
+// that catch what this project keeps getting wrong:
+//
+//   consistent — no answer may print a day of the week that disagrees with its
+//                own date. "Thursday, August 28, 2026" is wrong on its face
+//                whichever half is broken, and it is what makes a parent stop
+//                trusting the times as well.
+//   stable     — the dates in the answer must be the same on every run. Asked
+//                twice, "when is the next volleyball game" named a fixture on
+//                20 August and another on 1 September; only one can be next.
+//
+// Neither can tell you whether the date is the one the school published — only
+// the corpus can, and these run against the corpus the app actually has. They
+// say the answer does not contradict itself and does not change under you, which
+// is what "reliable" has to mean before "correct" is worth arguing about.
+import { checkAnswerDates, datesNamedIn } from '../src/lib/schedule.ts'
+
 const BASE = process.argv[2] ?? 'https://tca-hub.vercel.app'
 const RUNS = Number(process.argv[3] ?? 3)
+const TODAY = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
 
 /** must: every entry has to appear. mustNot: none may. any: at least one. */
 const CASES = [
@@ -93,6 +111,34 @@ const CASES = [
     mustNot: ["doesn't have", 'does not have', 'not offered'],
     why: 'thin schedule data must never become "the sport does not exist"',
   },
+  /* The reported failures, as cases with no `must` in them.
+   *
+   * What the school published is not known here, and inventing an expected date
+   * would bake this session's guess into the suite as though it were fact — the
+   * mistake that started all of this. So these assert only the two properties
+   * that hold whatever the calendar says: the answer agrees with itself, and it
+   * agrees with itself again on the next run. If picture day really is Friday the
+   * 28th, add `must: ['August 28']` and this becomes a correctness test too. */
+  {
+    q: 'when is JH picture day?',
+    why: 'answered "Thursday, August 28, 2026" — August 28 is a Friday',
+  },
+  {
+    q: 'when is picture make-up day?',
+    why: 'answered "Tuesday, October 7" — October 7 is a Wednesday',
+  },
+  {
+    q: 'when is the next volleyball game?',
+    why: 'answered 20 August one run and 1 September the next; only one is next',
+  },
+  {
+    q: "when is varsity volleyball's next game?",
+    why: 'a named level must be answered for that level, and the same way twice',
+  },
+  {
+    q: 'when is the next cross country meet?',
+    why: 'a meet names no opponent, so " vs " could not find one at all',
+  },
 ]
 
 /* /api/search allows 20 requests a minute, and this suite fires more than that.
@@ -121,6 +167,16 @@ async function ask(q) {
   return answer.replace(/\s+/g, ' ').trim()
 }
 
+/* Day names that disagree with their own date, whatever the date turns out to be.
+ *
+ * An empty context set is deliberate: with nothing to verify a date against,
+ * checkAnswerDates reports every mismatched pair rather than repairing any, which
+ * is what a test wants — the report, not the repair. */
+function contradictions(answer) {
+  const { corrected, unsupported } = checkAnswerDates(answer, { today: TODAY, contextDates: new Set() })
+  return [...corrected, ...unsupported].map(f => f.was)
+}
+
 function verdict(answer, c) {
   if (answer === '__RATE_LIMITED__') return 'rate limited — not a content failure'
   if (!answer.trim()) return 'empty response'
@@ -128,7 +184,19 @@ function verdict(answer, c) {
   for (const m of c.must ?? []) if (!has(m)) return `missing "${m}"`
   for (const m of c.mustNot ?? []) if (has(m)) return `contains "${m}"`
   if (c.any && !c.any.some(has)) return `none of ${c.any.join(' / ')}`
+  const wrongDays = contradictions(answer)
+  if (wrongDays.length) return `day/date contradiction: "${wrongDays[0]}"`
   return null
+}
+
+/** The dates an answer names, as a comparable signature.
+ *
+ * `datesNamedIn` rather than `datesIn`: an answer writes "August 20", with no
+ * year, and an extractor that skips those would find nothing to compare in
+ * exactly the answers this check exists for. */
+function dateSignature(answer) {
+  if (answer === '__RATE_LIMITED__' || !answer.trim()) return null
+  return datesNamedIn(answer, TODAY).join(',')
 }
 
 console.log(`${BASE} — ${CASES.length} questions x ${RUNS} runs\n`)
@@ -138,11 +206,21 @@ for (const c of CASES) {
   const answers = []
   for (let i = 0; i < RUNS; i++) answers.push(await ask(c.q))
   const bad = answers.map(a => verdict(a, c)).filter(Boolean)
+
+  /* Right twice and wrong once is not a working answer, and neither is right
+   * twice about two different dates. Compared across runs rather than within
+   * one, because the failure is invisible in any single sample — which is how it
+   * shipped. `debug: true` above bypasses the answer cache, so this measures
+   * retrieval each time instead of reading back the first run's answer. */
+  const signatures = [...new Set(answers.map(dateSignature).filter(s => s !== null))]
+  const unstable = signatures.length > 1
+  if (unstable) bad.push(`dates changed between runs: ${signatures.map(s => s || '(none)').join('  |  ')}`)
+
   const pass = bad.length === 0
   if (!pass) failed++
   // Flaky is its own outcome, and the one that matters most here: an answer
   // that is right twice and wrong once is not a working answer.
-  const label = pass ? 'ok  ' : bad.length === RUNS ? 'FAIL' : 'FLAKY'
+  const label = pass ? 'ok  ' : unstable ? 'UNSTABLE' : bad.length === RUNS ? 'FAIL' : 'FLAKY'
   console.log(`${label.padEnd(6)} ${c.q}`)
   if (!pass) {
     console.log(`       ${bad.length}/${RUNS} bad — ${[...new Set(bad)].join('; ')}`)
