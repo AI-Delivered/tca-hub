@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { storeChunks, sanitizeForPostgres } from '@/lib/ingest-chunks'
 import { withIngestLog } from '@/lib/ingest-log'
+import { identityRefusal } from '@/lib/school-identity'
 import { fetchSmoreNewsletter, parseSmoreUrl } from '@/lib/smore'
 
 export const maxDuration = 300
@@ -72,6 +73,7 @@ interface Body {
    *  silently misses is worse than one that was never claimed to exist. */
   redact?: unknown
   dryRun?: unknown
+  allowUnverifiedSchool?: unknown
 }
 
 function asStringArray(v: unknown): string[] {
@@ -161,8 +163,9 @@ async function smoreIngest(opts: {
   title: string
   redact: string[]
   dryRun: boolean
+  allowUnverifiedSchool: boolean
 }): Promise<NextResponse> {
-  const { supabase, today, smoreUrl, until, title, redact, dryRun } = opts
+  const { supabase, today, smoreUrl, until, title, redact, dryRun, allowUnverifiedSchool } = opts
 
   if (!parseSmoreUrl(smoreUrl)) {
     return NextResponse.json(
@@ -178,6 +181,19 @@ async function smoreIngest(opts: {
     // empty page stored quietly is the failure this route exists to avoid.
     return NextResponse.json({ error: String(err instanceof Error ? err.message : err) }, { status: 502 })
   }
+
+  /* The page has to say whose it is.
+   *
+   * The provenance line below calls this "the TCA campus newsletter" and the
+   * chunks are stored where the search route reads them as TCA's own words, so a
+   * mis-pasted URL does not produce a bad citation — it produces another school's
+   * dates in this school's voice. Searching for TCA's newsletter turns up several
+   * publications called "Titan eNews", at least one belonging to Academy High
+   * School: same district, same city, same Titan branding, same platform, and a
+   * URL with no slug in it to tell them apart. This is the check that a human
+   * skimming search results does not reliably make. */
+  const refusal = allowUnverifiedSchool ? '' : identityRefusal(`${issue.title}\n${issue.text}`, issue.url)
+  if (refusal) return NextResponse.json({ error: refusal }, { status: 422 })
 
   /* The expiry comes from the issue, not from the caller.
    *
@@ -274,12 +290,16 @@ async function run(req: NextRequest) {
   const until = typeof body.until === 'string' ? body.until.trim() : ''
   const smoreUrl = typeof body.url === 'string' ? body.url.trim() : ''
   const dryRun = body.dryRun === true
+  const allowUnverifiedSchool = body.allowUnverifiedSchool === true
 
   if (smoreUrl) {
     if (text) {
       return NextResponse.json({ error: 'pass url or text, not both' }, { status: 400 })
     }
-    return smoreIngest({ supabase, today, smoreUrl, until, title, redact: asStringArray(body.redact), dryRun })
+    return smoreIngest({
+      supabase, today, smoreUrl, until, title,
+      redact: asStringArray(body.redact), dryRun, allowUnverifiedSchool,
+    })
   }
 
   if (!SLUG.test(slug)) {
