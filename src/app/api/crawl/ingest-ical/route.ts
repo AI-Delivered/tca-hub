@@ -3,8 +3,12 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { storeChunks } from '@/lib/ingest-chunks'
 import { withIngestLog } from '@/lib/ingest-log'
+import { zonedInstant } from '@/lib/schedule'
 
 export const maxDuration = 300
+
+// Every feed in this file publishes for one school, in one place.
+const TZ = 'America/Denver'
 
 const FEEDS = [
   {
@@ -158,17 +162,16 @@ function parseIcalTime(dtstr: string): Date | null {
   if (!m) return null
   const [, year, month, day, hour, minute] = m
   if (isUtc) return new Date(`${year}-${month}-${day}T${hour}:${minute}:00Z`)
-  // Local Denver time — approximate offset (MDT Apr–Oct = -06:00, MST Nov–Mar = -07:00)
-  const mo = parseInt(month)
-  const offset = (mo >= 4 && mo <= 10) ? '-06:00' : '-07:00'
-  return new Date(`${year}-${month}-${day}T${hour}:${minute}:00${offset}`)
+  // Floating time means Denver wall clock. The offset is asked of the zone rather
+  // than guessed from the month — see zonedInstant.
+  return zonedInstant(Number(year), Number(month), Number(day), Number(hour), Number(minute), TZ)
 }
 
 /** "5:30 PM" — the clock time alone, for the end of a same-day event. */
 function formatTimeOnly(dtstr: string): string {
   const d = parseIcalTime(dtstr)
   if (!d || isNaN(d.getTime())) return ''
-  return d.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })
+  return d.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: TZ })
 }
 
 /* One date format across every source: `YYYY-MM-DD (Ddd) h:mm AM`.
@@ -212,20 +215,14 @@ function formatDate(dtstr: string): string {
     return iso(new Date(`${d[1]}-${d[2]}-${d[3]}T00:00:00Z`), 'UTC')
   }
   const [, year, month, day, hour, minute] = m
-  let date: Date
-  if (isUtc) {
-    date = new Date(`${year}-${month}-${day}T${hour}:${minute}:00Z`)
-  } else {
-    // Local Denver time — approximate offset (MDT Apr–Oct = -06:00, MST Nov–Mar = -07:00)
-    const mo = parseInt(month)
-    const offset = (mo >= 4 && mo <= 10) ? '-06:00' : '-07:00'
-    date = new Date(`${year}-${month}-${day}T${hour}:${minute}:00${offset}`)
-  }
+  const date = isUtc
+    ? new Date(`${year}-${month}-${day}T${hour}:${minute}:00Z`)
+    : zonedInstant(Number(year), Number(month), Number(day), Number(hour), Number(minute), TZ)
   if (isNaN(date.getTime())) return dtstr
   const time = date.toLocaleString('en-US', {
-    hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver',
+    hour: 'numeric', minute: '2-digit', timeZone: TZ,
   })
-  return `${iso(date, 'America/Denver')} ${time}`
+  return `${iso(date, TZ)} ${time}`
 }
 
 function parseDate(dtstr: string): Date {
@@ -238,9 +235,7 @@ function parseDate(dtstr: string): Date {
   if (!t || isUtc) {
     return new Date(`${year}-${month}-${day}T${t ? t[1] + ':' + t[2] + ':00' : '00:00:00'}Z`)
   }
-  const mo = parseInt(month)
-  const offset = (mo >= 4 && mo <= 10) ? '-06:00' : '-07:00'
-  return new Date(`${year}-${month}-${day}T${t[1]}:${t[2]}:00${offset}`)
+  return zonedInstant(Number(year), Number(month), Number(day), Number(t[1]), Number(t[2]), TZ)
 }
 
 async function run(req: NextRequest) {
@@ -305,7 +300,7 @@ async function run(req: NextRequest) {
       } else {
         // Group school calendar events by month
         const d = parseDate(e.start)
-        key = d.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'America/Denver' })
+        key = d.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: TZ })
       }
       if (!groups[key]) groups[key] = []
       groups[key].push(e)
@@ -357,7 +352,7 @@ async function run(req: NextRequest) {
        */
       const startAt = parseIcalTime(e.start)
       const endAt = parseIcalTime(e.end)
-      const denverDay = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
+      const denverDay = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: TZ })
       const spansDays = startAt && endAt
         ? denverDay(startAt) !== denverDay(endAt)
         : Boolean(endDay && endDay !== startDay)

@@ -14,6 +14,7 @@
 
 import {
   weekdayFor, longDate, formatClock, scheduleLine, datesIn, weekdayNote, DATED_LINE,
+  zonedInstant, zoneOffsetMinutes,
 } from '../src/lib/schedule.ts'
 
 let failures = 0
@@ -111,9 +112,21 @@ check(
   scheduleLine(pictureDay).match(DATED_LINE)[1],
   '2026-08-28'
 )
-// An all-day line has no clock time and is deliberately not an "event" for the
-// filters — a list of dated events is meant to carry times a parent can use.
-check('an all-day line is not a dated event', DATED_LINE.test(scheduleLine({ date: '2026-08-28', name: 'No School' })), false)
+/* An all-day line is an event too, which it did not used to be.
+ *
+ * A clock time was the whole test, so `2026-11-24 (Tuesday) — No School` matched
+ * nothing: it was missing from the week list the model is told is COMPLETE and
+ * told to answer only from, which is how "is there school on the 24th" gets a
+ * confident wrong answer, and missing from the next-game filter, where an all-day
+ * invitational is a real fixture. The day name is what marks the line as one an
+ * ingest route wrote, so prose is still kept out. */
+checkTrue('an all-day event is a dated event', DATED_LINE.test(scheduleLine({ date: '2026-11-24', name: 'No School' })))
+checkTrue('an all-day event behind a level tag too',
+  DATED_LINE.test('[Cross Country Varsity (Girls)] 2026-09-12 (Saturday) — Liberty Bell Invitational'))
+check('prose that merely mentions an ISO date is not an event',
+  DATED_LINE.test('Registration closes 2026-08-15 for all campuses.'), false)
+check('and a bare date with no day name and no time is not either',
+  DATED_LINE.test('2026-08-15 — see the office'), false)
 
 console.log('\n— datesIn —\n')
 
@@ -156,6 +169,36 @@ const season = Array.from({ length: 60 }, (_, i) => `2026-09-${String((i % 30) +
 const capped = weekdayNote(season)
 checkTrue('the pairing list is capped', capped.split('\n').filter(l => / = /.test(l)).length <= 40)
 checkTrue('the prose date survives the cap', capped.includes('2026-08-28 = Friday, August 28, 2026'))
+
+console.log('\n— zonedInstant —\n')
+
+/* Colorado does not change its clocks on the first of April.
+ *
+ * Every calendar route guessed the offset as MDT for months 4-10 and MST
+ * otherwise. In 2026 the change is 8 March and 1 November, so a floating-time
+ * event anywhere in late March was read an hour early and printed an hour late —
+ * `20260315T153000` came out as 4:30 PM — across the whole spring season.
+ */
+const denver = (y, mo, d, h, min) => zonedInstant(y, mo, d, h, min, 'America/Denver').toISOString()
+
+check('15 March is MDT, not MST — the month guess was an hour out here',
+  denver(2026, 3, 15, 15, 30), '2026-03-15T21:30:00.000Z')
+check('1 November is still MDT — so was this',
+  denver(2026, 11, 1, 0, 30), '2026-11-01T06:30:00.000Z')
+check('7 March, the day before the change, is MST', denver(2026, 3, 7, 15, 30), '2026-03-07T22:30:00.000Z')
+check('2 November, the day after, is MST', denver(2026, 11, 2, 15, 30), '2026-11-02T22:30:00.000Z')
+check('midsummer is MDT', denver(2026, 7, 15, 15, 30), '2026-07-15T21:30:00.000Z')
+check('midwinter is MST', denver(2026, 1, 15, 15, 30), '2026-01-15T22:30:00.000Z')
+// A 6:30 PM game in late March crossed midnight UTC in the wrong direction under
+// the guess, which is how an event could also move a day.
+check('an evening game in late March keeps its date', denver(2026, 3, 20, 18, 30), '2026-03-21T00:30:00.000Z')
+check('the offsets themselves, summer then winter', [
+  zoneOffsetMinutes(Date.UTC(2026, 6, 15, 18), 'America/Denver'),
+  zoneOffsetMinutes(Date.UTC(2026, 0, 15, 18), 'America/Denver'),
+].join(','), '-360,-420')
+// The hour a spring forward skips does not exist; resolving it to the hour before
+// is arbitrary but repeatable, which is all that is asked of it.
+check('a time the spring forward skips still resolves', denver(2026, 3, 8, 2, 30), '2026-03-08T08:30:00.000Z')
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all passed'}\n`)
 process.exit(failures ? 1 : 0)

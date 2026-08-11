@@ -102,6 +102,10 @@ export async function GET() {
     .from('page_chunks')
     .select('title')
     .ilike('title', 'TCA Athletics — %')
+    // Ordered: `LIMIT` with no `ORDER BY` returns any 200 rows Postgres likes, so
+    // which sports were found to "have data" — and therefore which questions were
+    // offered — changed between page loads.
+    .order('id')
     .limit(200)
   const generated = [
     ...sportsWithData([...new Set((athleticsRows ?? []).map(r => r.title as string))])

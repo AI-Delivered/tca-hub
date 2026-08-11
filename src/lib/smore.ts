@@ -103,6 +103,11 @@ function stripImages(text: string): string {
  * current-year school newsletters, and a 1926 newsletter is not a case worth
  * handling.
  */
+const MONTH_NAMES = [
+  'january', 'february', 'march', 'april', 'may', 'june',
+  'july', 'august', 'september', 'october', 'november', 'december',
+]
+
 function parseIssueDate(text: string): string | null {
   const slash = text.match(/^#{1,3}\s*(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s*$/m)
   if (slash) {
@@ -112,7 +117,10 @@ function parseIssueDate(text: string): string | null {
   }
   const named = text.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(20\d{2})\b/i)
   if (named) {
-    const month = new Date(`${named[1]} 1, 2000`).getMonth() + 1
+    // Looked up, not parsed. `new Date('August 1, 2000')` leans on the engine's
+    // lenient date parser, which is implementation-defined for month names — and
+    // the name was matched from this very list a line above.
+    const month = MONTH_NAMES.indexOf(named[1].toLowerCase()) + 1
     return `${named[3]}-${String(month).padStart(2, '0')}-${String(Number(named[2])).padStart(2, '0')}`
   }
   return null

@@ -48,6 +48,67 @@ export function weekdayFor(ymd: string): string {
   return WEEKDAYS[t.getUTCDay()]
 }
 
+/* The instant a wall-clock time in a named zone actually denotes.
+ *
+ * Every route that reads a calendar feed had its own copy of this guess:
+ *
+ *   const offset = (mo >= 4 && mo <= 10) ? '-06:00' : '-07:00'
+ *
+ * Colorado does not change its clocks on the first of April and the first of
+ * November. In 2026 it springs forward on 8 March and falls back on 1 November,
+ * so the guess is an hour wrong for every floating-time event from 8 to 31 March
+ * and on 1 November — a whole month of the spring season, in which basketball,
+ * track, soccer and lacrosse all play. The event was read an hour earlier than it
+ * is and then printed an hour later than it is: `20260315T153000` came out as
+ * 4:30 PM. That is the failure this corpus can least afford, because nobody
+ * checks a plausible time — they drive to it. An event late enough in the evening
+ * crossed midnight in the wrong direction and moved a day as well.
+ *
+ * The zone itself is asked instead of guessed. Format the guessed instant in the
+ * zone, read back what wall clock it lands on, and the difference is the offset in
+ * force there; do it twice, because correcting by the first offset can cross a
+ * transition and change which offset applies. A wall-clock time that a spring
+ * forward skips entirely resolves to the hour before it, which is arbitrary but
+ * deterministic — the feed should not be publishing one.
+ */
+const ZONE_FORMATTERS = new Map<string, Intl.DateTimeFormat>()
+
+function zoneFormatter(tz: string): Intl.DateTimeFormat {
+  let formatter = ZONE_FORMATTERS.get(tz)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    })
+    ZONE_FORMATTERS.set(tz, formatter)
+  }
+  return formatter
+}
+
+/** The zone's offset from UTC in minutes at a given instant (Denver: -360 or -420). */
+export function zoneOffsetMinutes(utcMs: number, tz: string): number {
+  const parts = zoneFormatter(tz).formatToParts(new Date(utcMs))
+  const value = (type: string) => Number(parts.find(p => p.type === type)?.value)
+  // Some ICU versions render midnight as hour 24 under hour12:false.
+  const wall = Date.UTC(
+    value('year'), value('month') - 1, value('day'),
+    value('hour') % 24, value('minute'), value('second')
+  )
+  return (wall - utcMs) / 60_000
+}
+
+/** The instant at which it is `h:min` on `y-mo-d` in `tz`. */
+export function zonedInstant(
+  y: number, mo: number, d: number, h: number, min: number, tz: string
+): Date {
+  const guess = Date.UTC(y, mo - 1, d, h, min)
+  const first = zoneOffsetMinutes(guess, tz)
+  const corrected = guess - first * 60_000
+  const second = zoneOffsetMinutes(corrected, tz)
+  return new Date(first === second ? corrected : guess - second * 60_000)
+}
+
 /** `2026-08-28` as `Friday, August 28, 2026`, or '' if it is not a real date. */
 export function longDate(ymd: string): string {
   const dow = weekdayFor(ymd)
@@ -56,17 +117,31 @@ export function longDate(ymd: string): string {
   return `${dow}, ${MONTHS[Number(month) - 1]} ${Number(day)}, ${year}`
 }
 
-/* A date plus a time, anywhere in the line, is what makes it an event.
+/* What makes a line an event: an ISO date, followed either by the day name every
+ * ingest route writes or by a clock time somewhere later on.
  *
  * Shared, because both of the search route's code filters — the "next game" one
  * and the week list it hands over labelled COMPLETE — are built from the lines
  * this matches, and an ingest route that writes a line it does not match puts
  * that event outside both while the list still calls itself complete. It lived
  * in the search route, which is the one place that could not check the ingest
- * side against it. Requiring the date at the start is what once excluded every
+ * side against it. Requiring the date at the *start* is what once excluded every
  * ical schedule, since those lead with their level:
- * `[Volleyball Varsity (Girls)] 2026-08-20 (Thursday) 6:00 PM`. */
-export const DATED_LINE = /(\d{4}-\d{2}-\d{2})(?=.*\d{1,2}:\d{2})/
+ * `[Volleyball Varsity (Girls)] 2026-08-20 (Thursday) 6:00 PM`.
+ *
+ * The day-name branch is what admits all-day events. A time alone was the whole
+ * test, and an all-day entry has no time — so `2026-11-24 (Tuesday) — No School`
+ * and an all-day tournament were both invisible: absent from a week list the model
+ * is told is COMPLETE and told to answer only from, which turns "is there school
+ * on the 24th" into a confident wrong answer, and absent from the next-game filter,
+ * where an all-day invitational is a legitimate next fixture.
+ *
+ * The time requirement was there to keep prose that merely mentions a date out of
+ * a list asserted to be exhaustive, and that still holds: prose writes "November
+ * 24", not `2026-11-24 (Tuesday)`. The parenthesised day name only appears on a
+ * line some ingest route formatted. */
+export const DATED_LINE =
+  /(\d{4}-\d{2}-\d{2})(?=\s*\((?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\)|.*\d{1,2}:\d{2})/
 
 /** A clock time as `h:mm AM`, from an ISO timestamp or a bare `HH:MM`.
  *
@@ -334,12 +409,27 @@ export function datedLines(text: string): DatedLine[] {
 const IS_PRACTICE = /\b(practice|tryouts?|scrimmage|weights|open gym|camps?|conditioning)\b/i
 const IS_GAME = / vs /i
 
+/* Competitions that are not against one named opponent.
+ *
+ * " vs " was the entire test for a game, and half of TCA's sports do not play
+ * that way: a cross country meet, a track invitational, a swim triangular and a
+ * wrestling tournament are all one line naming an event and no opponent. So
+ * "when is the next cross country meet" could not be computed at all — no line
+ * counted as a game, and the question fell back to whatever retrieval returned,
+ * which is the behaviour this whole exercise is about.
+ *
+ * "Meet" needs the guard. A school calendar is full of Meet the Teacher, Meet
+ * and Greet and Meet Your Coaches, and calling those a competition would offer a
+ * parent an evening in a classroom as their child's next race. */
+const IS_COMPETITION =
+  /\b(?:invitational|tournaments?|championships?|playoffs?|regionals?|relays?|jamboree|duals?|triangular|quad)\b|\bmeets?\b(?!\s+(?:and|the|&|your|our|with))/i
+
 export function isPractice(line: string): boolean {
   return IS_PRACTICE.test(line)
 }
 
 export function isGame(line: string): boolean {
-  return IS_GAME.test(line) && !IS_PRACTICE.test(line)
+  return (IS_GAME.test(line) || IS_COMPETITION.test(line)) && !IS_PRACTICE.test(line)
 }
 
 export interface NextEvent {

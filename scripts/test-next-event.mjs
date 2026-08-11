@@ -50,6 +50,23 @@ checkTrue('a practice is a practice', isPractice(VARSITY_PRACTICE))
 checkTrue('a home game at North Campus is still a game', isGame(HOME_AT_NORTH))
 checkTrue('and is not a practice', !isPractice(HOME_AT_NORTH))
 
+/* Half of TCA's sports do not play one named opponent, and " vs " was the whole
+ * test — so "when is the next cross country meet" had no line to compute from. */
+const INVITATIONAL = line('Cross Country Varsity (Girls)', '2026-09-12', 'Saturday', '9:00 AM', 'Liberty Bell Invitational @ Woodland Park')
+const ALL_DAY_MEET = '[Track & Field Varsity (Boys)] 2026-05-15 (Friday) — State Championships @ Jeffco Stadium'
+checkTrue('an invitational is a competition', isGame(INVITATIONAL))
+checkTrue('so is an all-day championship with no time at all', isGame(ALL_DAY_MEET))
+checkTrue('a swim triangular counts', isGame(line('Swim Varsity (Girls)', '2026-09-12', 'Saturday', '9:00 AM', 'Triangular @ Air Academy')))
+// A school calendar is full of these, and calling one a competition offers a
+// parent an evening in a classroom as their child's next race.
+checkTrue('"Meet the Teacher" is not a competition', !isGame(line('', '2026-08-14', 'Friday', '5:00 PM', 'Meet the Teacher @ North Campus')))
+checkTrue('nor is a Meet and Greet', !isGame(line('', '2026-08-14', 'Friday', '5:00 PM', 'Fall Sports Meet and Greet')))
+checkTrue('nor is picture day', !isGame('2026-08-28 (Friday) 8:00 AM–10:00 AM — JH Picture Day @ North Campus'))
+// The next meet is computable now, which is the point of the above.
+check('the next meet can be computed', nextEventsByLevel(
+  datedLines([INVITATIONAL, ALL_DAY_MEET].join('\n')), { today: TODAY, kind: 'game' }
+).map(e => e.ymd), ['2026-09-12'])
+
 console.log('\n— assemblePieces —\n')
 
 // chunkText re-opens each piece with the last whole lines of the one before it.
