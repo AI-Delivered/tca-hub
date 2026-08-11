@@ -14,7 +14,7 @@
 
 import {
   weekdayFor, longDate, formatClock, scheduleLine, datesIn, weekdayNote, DATED_LINE,
-} from '../src/lib/schedule-dates.ts'
+} from '../src/lib/schedule.ts'
 
 let failures = 0
 const check = (name, actual, expected) => {

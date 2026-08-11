@@ -200,3 +200,222 @@ export function weekdayNote(context: string): string {
     `listed above and the schedule line does not spell its day out in parentheses, give the date with no day ` +
     `name at all.${conflicts.length ? `\n${conflicts.join('\n')}` : ''}`
 }
+
+/* Answering "when is the next game" from the whole schedule instead of a slice of it.
+ *
+ * Reported: the same question, asked twice, named two different games — Varsity
+ * volleyball against Palmer Ridge on 20 August, and against Lewis-Palmer on
+ * 1 September. Only the first is the next one. Both answers were written from a
+ * context that honestly did not contain the other, which is why re-asking
+ * produced a different confident answer rather than a hedge.
+ *
+ * The cause is in how a long document is stored and then fetched back. storeChunks
+ * splits a document into 1,800-character pieces and writes each as its own row
+ * under the same url and title, so GoBound's eighteen-week schedule is twenty-odd
+ * rows that are all called "TCA Athletics & Activities — Upcoming Schedule". The
+ * search route anchored that title with `.limit(1)` and no ordering, so Postgres
+ * returned whichever piece it liked: one arbitrary window of the season, changing
+ * whenever the nightly ingest deletes and re-inserts the rows. Draw the piece that
+ * starts in September and the 20 August match is not merely ranked low, it is
+ * absent — and the route's own comment already knew this was the shape of the
+ * problem: "the sorting is sound, the input is not always complete."
+ *
+ * So the pieces are put back together in id order — insertion order, which is
+ * document order — and the answer to "the next one" is taken in code from the
+ * complete list. Ordering, assembling and picking are all deterministic, so the
+ * same corpus and the same question give the same answer every time.
+ */
+/** One row of `page_chunks`: a piece of a document, not a document. */
+export interface Piece {
+  id: number
+  url: string
+  title: string
+  content: string
+}
+
+/* Overlap is what makes this a join rather than a concatenation.
+ *
+ * chunkText re-opens each piece with the last whole lines of the one before it,
+ * so pasting pieces together plainly repeats those lines — and a repeated event
+ * line is a second game to anything counting them. The seam is exact whole lines,
+ * so it can be found and dropped exactly. */
+const MAX_SEAM_LINES = 40
+
+/** The pieces of one document, joined back into the document, in id order. */
+export function assemblePieces(pieces: Piece[]): string {
+  const ordered = [...pieces].sort((a, b) => a.id - b.id)
+  const out: string[] = []
+  for (const piece of ordered) {
+    const lines = piece.content.split('\n')
+    // Longest run of leading lines that is already the tail of what we have.
+    let seam = 0
+    for (let n = Math.min(MAX_SEAM_LINES, lines.length, out.length); n > 0; n--) {
+      let same = true
+      for (let i = 0; i < n; i++) {
+        if (out[out.length - n + i] !== lines[i]) { same = false; break }
+      }
+      if (same) { seam = n; break }
+    }
+    out.push(...lines.slice(seam))
+  }
+  return out.join('\n')
+}
+
+/** Pieces grouped into documents by url, each assembled, keyed by url. */
+export function assembleByUrl(pieces: Piece[]): Array<{ url: string; title: string; content: string }> {
+  const groups = new Map<string, Piece[]>()
+  for (const piece of pieces) {
+    const group = groups.get(piece.url)
+    if (group) group.push(piece)
+    else groups.set(piece.url, [piece])
+  }
+  // Documents in the order their first piece was written, so the assembled list
+  // is as stable as the rows themselves.
+  return [...groups.values()]
+    .sort((a, b) => Math.min(...a.map(p => p.id)) - Math.min(...b.map(p => p.id)))
+    .map(group => ({
+      url: group[0].url,
+      title: group[0].title,
+      content: assemblePieces(group),
+    }))
+}
+
+export interface DatedLine {
+  /** The event date, `YYYY-MM-DD`. */
+  ymd: string
+  /** The level tag ingest-ical writes, e.g. `Volleyball Varsity (Girls)`, or ''. */
+  level: string
+  /** Minutes past midnight, for ordering events within a day. */
+  minutes: number
+  line: string
+}
+
+const LEVEL_TAG = /^\[([^\]]+)\]\s*/
+const CLOCK = /(\d{1,2}):(\d{2})\s*(AM|PM)/i
+
+function minutesOf(line: string): number {
+  const m = CLOCK.exec(line)
+  if (!m) return 0
+  const hour = Number(m[1]) % 12 + (m[3].toUpperCase() === 'PM' ? 12 : 0)
+  return hour * 60 + Number(m[2])
+}
+
+/** Every dated event line in some schedule text, deduplicated and in time order.
+ *
+ * Deduplicated on the text of the line: the same event legitimately appears in
+ * more than one document — GoBound's aggregate view and the per-level schedule
+ * both carry it — and two identical lines are one game. */
+export function datedLines(text: string): DatedLine[] {
+  const seen = new Set<string>()
+  const out: DatedLine[] = []
+  for (const raw of text.split('\n')) {
+    const line = raw.trim()
+    const ymd = line.match(DATED_LINE)?.[1]
+    if (!ymd || seen.has(line)) continue
+    seen.add(line)
+    out.push({
+      ymd,
+      level: line.match(LEVEL_TAG)?.[1]?.trim() ?? '',
+      minutes: minutesOf(line),
+      line,
+    })
+  }
+  return out.sort((a, b) =>
+    a.ymd.localeCompare(b.ymd) || a.minutes - b.minutes || a.level.localeCompare(b.level) || a.line.localeCompare(b.line))
+}
+
+/* What the two kinds of question are asking for.
+ *
+ * These moved out of the search route so the same test can hold them against the
+ * lines an ingest route actually writes. `camp` is anchored for the reason the
+ * route recorded: unanchored, it matches "The Classical Academy North Campus",
+ * where most home fixtures are played, so every home game read as a practice and
+ * was dropped from the answer. */
+const IS_PRACTICE = /\b(practice|tryouts?|scrimmage|weights|open gym|camps?|conditioning)\b/i
+const IS_GAME = / vs /i
+
+export function isPractice(line: string): boolean {
+  return IS_PRACTICE.test(line)
+}
+
+export function isGame(line: string): boolean {
+  return IS_GAME.test(line) && !IS_PRACTICE.test(line)
+}
+
+export interface NextEvent {
+  level: string
+  ymd: string
+  /** Every event for that level on that date — a parent with a player on the
+   * other team playing the same afternoon needs their time too. */
+  lines: string[]
+}
+
+/** The earliest upcoming event of one kind, per level, from a complete list.
+ *
+ * Per level rather than one overall, because "volleyball" is not one team: JV and
+ * Varsity often play the same afternoon, and naming only whichever happens to be
+ * first sends half the parents who asked to the wrong place. A line with no level
+ * tag has no team to be the next event for, so it is grouped on its own rather
+ * than allowed to stand in for one. */
+export function nextEventsByLevel(
+  lines: DatedLine[],
+  opts: { today: string; kind: 'game' | 'practice' }
+): NextEvent[] {
+  const wanted = opts.kind === 'practice' ? isPractice : isGame
+  const earliest = new Map<string, string>()
+  for (const l of lines) {
+    if (l.ymd < opts.today || !wanted(l.line)) continue
+    const prev = earliest.get(l.level)
+    if (!prev || l.ymd < prev) earliest.set(l.level, l.ymd)
+  }
+
+  return [...earliest.entries()]
+    .map(([level, ymd]) => ({
+      level,
+      ymd,
+      lines: lines.filter(l => l.level === level && l.ymd === ymd && wanted(l.line)).map(l => l.line),
+    }))
+    .sort((a, b) => a.ymd.localeCompare(b.ymd) || a.level.localeCompare(b.level))
+}
+
+/* Reading a team out of a question, against the tags the feed itself writes.
+ *
+ * `ask` is what the parent might type, `tag` is what X-BND-ACTIVITYLEVEL looks
+ * like once ingest-ical has written it into the line. Two things need care.
+ *
+ * "Junior varsity" contains "varsity", so a bare varsity rule matches it and a
+ * question about JV would be answered with Varsity's fixture alongside — hence
+ * `beats`: the more specific reading of the question wins and removes the looser
+ * one. And the levels a parent names are one category while girls/boys is
+ * another, so "girls varsity" has to mean Varsity *and* Girls. Within a category
+ * the readings are alternatives; across categories they all have to hold, or
+ * naming both narrows nothing.
+ */
+const TEAM_RULES: Array<{ name: string; group: string; ask: RegExp; tag: RegExp; beats?: string[] }> = [
+  { name: 'jv', group: 'level', ask: /\b(jv|junior varsity)\b/i, tag: /\bjv\b|junior varsity/i, beats: ['varsity'] },
+  { name: 'varsity', group: 'level', ask: /\bvarsity\b/i, tag: /\bvarsity\b/i },
+  { name: 'c-squad', group: 'level', ask: /\bc[-\s]?squad\b/i, tag: /\bc[-\s]?squad\b/i },
+  { name: 'freshman', group: 'level', ask: /\b(freshman|frosh)\b/i, tag: /\bfreshm[ae]n\b/i },
+  { name: 'jh', group: 'level', ask: /\b(jh|junior high|middle school)\b/i, tag: /\bjh\b|junior high/i },
+  // "the JH A team" — the tag spells it `Volleyball JH A (Girls)`, so the letter
+  // stands alone in it rather than carrying the word "team".
+  { name: 'a-team', group: 'squad', ask: /\ba[-\s]team\b/i, tag: /\ba\b/i },
+  { name: 'b-team', group: 'squad', ask: /\bb[-\s]team\b/i, tag: /\bb\b/i },
+  { name: 'girls', group: 'sex', ask: /\b(girls?|womens?)\b/i, tag: /\(girls\)/i },
+  { name: 'boys', group: 'sex', ask: /\b(boys?|mens?)\b/i, tag: /\(boys\)/i },
+]
+
+/** The level tags matching the team the parent named, or [] if they named none.
+ *
+ * [] is not "no teams" but "they did not say" — the caller then answers for every
+ * level of the sport and lets the earliest one lead. */
+export function levelsAskedFor(query: string, levels: string[]): string[] {
+  let asked = TEAM_RULES.filter(r => r.ask.test(query))
+  const beaten = new Set(asked.flatMap(r => r.beats ?? []))
+  asked = asked.filter(r => !beaten.has(r.name))
+  if (!asked.length) return []
+
+  const groups = [...new Set(asked.map(r => r.group))]
+  return levels.filter(level =>
+    groups.every(group => asked.some(r => r.group === group && r.tag.test(level))))
+}

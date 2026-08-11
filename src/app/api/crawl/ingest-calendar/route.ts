@@ -3,7 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { isCrawlAuthorized } from '@/lib/auth'
 import { storeChunks } from '@/lib/ingest-chunks'
 import { withIngestLog } from '@/lib/ingest-log'
-import { scheduleLine } from '@/lib/schedule-dates'
+import { scheduleLine } from '@/lib/schedule'
 
 export const maxDuration = 300
 
@@ -56,7 +56,7 @@ interface CalendarEvent {
   sport: string
 }
 
-/* Times and day names are formatted by src/lib/schedule-dates.ts now, which is
+/* Times and day names are formatted by src/lib/schedule.ts now, which is
  * also where the search route's DATED_LINE lives, so a line written here and the
  * filters that read it cannot drift apart. This route used to have its own
  * formatter, and it differed from every other source in two ways that mattered:

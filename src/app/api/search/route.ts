@@ -5,7 +5,9 @@ import { queryKey } from '@/lib/query-key'
 import { logQuery } from '@/lib/query-log'
 import { rateLimit, tooManyRequests } from '@/lib/rate-limit'
 import { secretMatches } from '@/lib/auth'
-import { DATED_LINE, weekdayNote } from '@/lib/schedule-dates'
+import {
+  DATED_LINE, weekdayNote, assembleByUrl, datedLines, nextEventsByLevel, levelsAskedFor,
+} from '@/lib/schedule'
 
 export const maxDuration = 60
 
@@ -380,12 +382,22 @@ export async function POST(req: NextRequest) {
     query.match(/(?:about|find|contact|email)\s+(?:mr\.?|mrs\.?|ms\.?|miss\.?|dr\.?|coach\.?)?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/i)
   if (nameMatch) {
     const name = nameMatch[1].trim()
+    /* Every keyword query below is ordered, and none of them used to be.
+     *
+     * `LIMIT` without `ORDER BY` lets Postgres return any rows it likes, and it
+     * does: the set changes when the planner changes its mind and when the
+     * nightly ingest deletes and re-inserts the rows it is choosing from. Two
+     * identical questions minutes apart were drawing different context and
+     * therefore giving different answers, which is the whole complaint. `id` is
+     * insertion order, so it is also document order — the earliest piece of a
+     * document wins a tie instead of an arbitrary one. */
     // Exact match first
     const { data: exactRows } = await supabase
       .from('page_chunks')
       .select('url, title, content')
       .ilike('url', '%staff-directory%')
       .ilike('content', `%${name}%`)
+      .order('id')
       .limit(8)
     keywordChunks = (exactRows ?? []).map(c => ({ ...c, similarity: 0.6 }))
 
@@ -395,6 +407,7 @@ export async function POST(req: NextRequest) {
         .from('page_chunks')
         .select('url, title, content')
         .ilike('url', '%staff-directory%')
+        .order('id')
         .limit(60)
       // Split searched name into parts so "Matt Brunk" scores "Matt"↔"Matthew" and "Brunk"↔"Brunk"
       const nameParts = name.toLowerCase().split(/\s+/).filter((p: string) => p.length >= 3)
@@ -463,6 +476,7 @@ export async function POST(req: NextRequest) {
         .from('page_chunks')
         .select('url, title, content')
         .ilike('content', `%${phrase.replace(/[%_]/g, ' ')}%`)
+        .order('id')
         .limit(9)
       return { phrase, rows: data ?? [] }
     }))
@@ -500,8 +514,8 @@ export async function POST(req: NextRequest) {
       .ilike('url', '%staff-directory%')
       .ilike('title', `${wantCampus} — %`)
     const { data: campusRows } = roleAnchor
-      ? await anchorQuery.ilike('content', `%${stem(roleAnchor)}%`).limit(4)
-      : await anchorQuery.ilike('title', '%Leadership%').limit(2)
+      ? await anchorQuery.ilike('content', `%${stem(roleAnchor)}%`).order('id').limit(4)
+      : await anchorQuery.ilike('title', '%Leadership%').order('id').limit(2)
     keywordChunks = [...keywordChunks, ...(campusRows ?? []).map(c => ({ ...c, similarity: 0.7 }))]
   }
 
@@ -526,7 +540,7 @@ export async function POST(req: NextRequest) {
       .select('url, title, content')
       .ilike('content', '%BELL SCHEDULE%')
     const scoped = wantCampus ? bellQuery.ilike('title', `%${wantCampus}%`) : bellQuery
-    const { data: bellRows } = await scoped.limit(4)
+    const { data: bellRows } = await scoped.order('id').limit(4)
     keywordChunks = [...keywordChunks, ...(bellRows ?? []).map(c => ({ ...c, similarity: 0.75 }))]
   }
 
@@ -590,6 +604,7 @@ export async function POST(req: NextRequest) {
             .select('url, title, content')
             .or(src)
             .ilike('content', `%${term}%`)
+            .order('id')
             .limit(3)
             .then(r => r.data ?? [])
         )
@@ -632,6 +647,7 @@ export async function POST(req: NextRequest) {
       .or(campusFilters.map(f => `url.ilike.${f}`).join(','))
       .or(futureMonthSlugs.map(s => `url.ilike.${s}`).join(','))
       .order('url', { ascending: true })
+      .order('id')
       .limit(120)
 
     // The per-month `.limit(1)` the fan-out used to give is reproduced here:
@@ -659,24 +675,55 @@ export async function POST(req: NextRequest) {
   // anchored, instead of leaving it to embedding-ranking luck.
   const matchedSport = SPORT_NAMES.find(t => hasTerm(query, t))
 
+  /* The athletics schedule as whole documents, reassembled from their pieces.
+   *
+   * This is what made "when is the next volleyball game" answer one thing on one
+   * asking and something else on the next. storeChunks splits a document into 1,800-character
+   * pieces and writes each as its own row under the same url and title, so
+   * GoBound's eighteen-week schedule is twenty-odd rows all titled "TCA Athletics
+   * & Activities — Upcoming Schedule". Anchoring that title with `.limit(1)` and
+   * no ordering asked Postgres for one of them and let it choose: one arbitrary
+   * window of the season, and a different one after each nightly delete-and-
+   * reinsert. Draw the piece that begins in September and Varsity's 20 August
+   * match against Palmer Ridge is not ranked low, it is not there at all — so the
+   * answer named the 1 September game against Lewis-Palmer instead, with nothing
+   * in the context to contradict it.
+   *
+   * Ordered by id, which is insertion order and therefore document order, and
+   * joined back into one chunk per url with the overlap seams removed. Size is
+   * not a worry here: trimChunk caps every chunk at CHUNK_CHAR_CAP and drops past
+   * events first, so a complete document costs no more context than a piece of one
+   * did — it just isn't missing the part that answers the question.
+   */
+  let scheduleText = ''
   if (isSportsQuery) {
-    // Always anchor sports queries with the GoBound upcoming chunk — it's the authoritative
-    // aggregated view of all TCA athletics for the next 30 days with exact times.
-    // Give it the highest priority so it wins over TeamReach or sport-specific chunks.
-    // Fetch both GoBound upcoming chunks by exact title — avoids # encoding issues in ILIKE
+    // Always anchor sports queries with the GoBound upcoming chunks — the
+    // authoritative aggregated view of all TCA athletics with exact times. Given
+    // the highest priority so they win over TeamReach or sport-specific chunks.
+    // Matched by exact title — avoids # encoding issues in ILIKE.
+    const ANCHOR_PIECES = 120
     const [{ data: gbUpcoming }, { data: gbSchedule }, sportChunks] = await Promise.all([
-      supabase.from('page_chunks').select('url, title, content').eq('title', 'TCA Athletics — Upcoming').limit(1),
-      supabase.from('page_chunks').select('url, title, content').eq('title', 'TCA Athletics & Activities — Upcoming Schedule').limit(1),
+      supabase.from('page_chunks').select('id, url, title, content')
+        .eq('title', 'TCA Athletics — Upcoming').order('id').limit(ANCHOR_PIECES),
+      supabase.from('page_chunks').select('id, url, title, content')
+        .eq('title', 'TCA Athletics & Activities — Upcoming Schedule').order('id').limit(ANCHOR_PIECES),
       matchedSport
-        ? supabase.from('page_chunks').select('url, title, content').ilike('title', 'TCA Athletics%').ilike('title', `%${matchedSport}%`).limit(20)
+        ? supabase.from('page_chunks').select('id, url, title, content')
+            .ilike('title', 'TCA Athletics%').ilike('title', `%${matchedSport}%`).order('id').limit(ANCHOR_PIECES)
         : Promise.resolve({ data: [] }),
     ])
-    const gbChunks = [...(gbUpcoming ?? []), ...(gbSchedule ?? [])].map(c => ({ ...c, similarity: 0.90 }))
+    const gbChunks = assembleByUrl([...(gbUpcoming ?? []), ...(gbSchedule ?? [])])
+      .map(c => ({ ...c, similarity: 0.90 }))
     // Below the Upcoming anchor's 0.90 (so the 30-day view still wins on recency) but above
     // the 0.50 source-display threshold, so the sport-specific chunk always makes it into
     // context and is cited as a source.
-    const sportSpecificChunks = (sportChunks.data ?? []).map(c => ({ ...c, similarity: 0.82 }))
+    const sportSpecificChunks = assembleByUrl(sportChunks.data ?? [])
+      .map(c => ({ ...c, similarity: 0.82 }))
     keywordChunks = [...gbChunks, ...sportSpecificChunks, ...keywordChunks]
+    // Kept whole and separate from the context, which is trimmed to a budget. The
+    // "next event" answer below is computed from this, so it does not depend on
+    // which lines survived trimming.
+    scheduleText = [...gbChunks, ...sportSpecificChunks].map(c => c.content).join('\n')
   }
 
   if (calTermMatch && !isSportsQuery) {
@@ -689,6 +736,7 @@ export async function POST(req: NextRequest) {
       .ilike('url', urlFilter)
       .ilike('content', `%${calTermMatch}%`)
       .order('url', { ascending: true })
+      .order('id')
       .limit(60)
     // Ordering is alphabetical by URL, so last year's months (…-april-2025) crowd
     // out this year's. Over-fetch, drop the stale ones, then take the top 20.
@@ -895,8 +943,22 @@ export async function POST(req: NextRequest) {
   const CHUNK_CHAR_CAP = 5_000
   const MONTHS_SHORT = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
-  // "[Football JH B (Boys)] Thu, Jul 23, 2026, 7:00 PM: …"
+  /* The date on a schedule line, in either format the corpus has ever used.
+   *
+   * This only knew the old one — `[Football JH B (Boys)] Thu, Jul 23, 2026,
+   * 7:00 PM: …` — and every schedule source has since been moved to
+   * `2026-07-23 (Thursday) 7:00 PM`. So it returned null for every line it was
+   * given, the "yesterday's practice can't be the answer" filter below silently
+   * stopped filtering anything, and a chunk over the cap spent its budget on
+   * games that had already been played. That is the other half of why the next
+   * game was hard to find in a trimmed schedule: the past was still in it.
+   *
+   * The ISO form is read as local wall-clock components rather than parsed as a
+   * string, since `new Date('2026-07-23')` is midnight UTC and compares as the
+   * previous day here. */
   function lineDate(line: string): Date | null {
+    const iso = line.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/)
+    if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]))
     const m = line.match(/\b([A-Z][a-z]{2})[a-z]*\s+(\d{1,2}),\s*(20\d{2})\b/)
     if (!m) return null
     const mi = MONTHS_SHORT.indexOf(m[1].toLowerCase())
@@ -991,76 +1053,104 @@ export async function POST(req: NextRequest) {
     game: /\b(game|match|meet|contest|competition|tournament)\b/i,
     practice: /\b(practice|tryouts?|scrimmage|weights|conditioning|training)\b/i,
   }
-  /* Anchored, because these run against lines that name a venue. Unanchored
-   * `camp` matches "The Classical Academy North Campus" — where most home
-   * fixtures are played — so every home game read as a practice and was
-   * dropped. Anchoring is what makes the August 20 volleyball match findable. */
-  const IS_PRACTICE = /\b(practice|tryouts?|scrimmage|weights|open gym|camps?|conditioning)\b/i
-  const IS_GAME = / vs /i
   // What counts as a dated event — `DATED_LINE`, imported, because the ingest
   // routes that write these lines have to be checkable against the same rule.
+  // `isGame`/`isPractice` moved alongside it for the same reason.
   const asksPractice = NEXT_KIND.practice.test(query)
   const asksNext = /\bnext\b/i.test(query) && (asksPractice || NEXT_KIND.game.test(query))
   const todayYmd = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
 
   let answerContext = context
   let nextNote = ''
-  if (asksNext && /\d{4}-\d{2}-\d{2}/.test(context)) {
-    const wanted = (line: string) =>
-      asksPractice ? IS_PRACTICE.test(line) : IS_GAME.test(line) && !IS_PRACTICE.test(line)
+  if (asksNext) {
+    /* Computed from the whole schedule where there is one, and it matters which.
+     *
+     * `scheduleText` is the athletics documents reassembled from their pieces, so
+     * every dated event for the sport asked about is in it whether or not it
+     * survived retrieval and trimming. That is the difference between this and the
+     * version that answered 20 August one time and 1 September the next: the
+     * sorting was always sound, the input was a slice.
+     *
+     * The fallback to `context` is for a "next …" question that reaches here with
+     * no schedule document behind it. It is the older, weaker behaviour and it
+     * says so below rather than claiming a completeness it cannot support. */
+    const complete = Boolean(scheduleText.trim())
+    const kind = asksPractice ? 'practice' : 'game'
+    /* Narrowed to the sport before anything else, because the aggregate documents
+     * carry every team in the school. Without this, "varsity volleyball's next
+     * game" matches the level tag on Basketball Varsity too, and the answer names
+     * a basketball fixture for a volleyball question. */
+    const all = datedLines(complete ? scheduleText : context)
+      .filter(l => !matchedSport || hasTerm(l.line, matchedSport))
+    const computed = nextEventsByLevel(all, { today: todayYmd, kind })
 
-    // Earliest upcoming date per team/level, over the lines of the kind asked
-    // about. The level tag is what ingest-ical writes; an untagged dated line
-    // has no team to be the "next" one for, so it is grouped separately rather
-    // than allowed to win.
-    const earliest = new Map<string, string>()
-    for (const raw of context.split('\n')) {
-      const line = raw.trim()
-      const date = line.match(DATED_LINE)?.[1]
-      if (!date || date < todayYmd || !wanted(line)) continue
-      const level = line.match(/^\[([^\]]+)\]/)?.[1] ?? '(untagged)'
-      const prev = earliest.get(level)
-      if (!prev || date < prev) earliest.set(level, date)
-    }
+    /* Which teams the answer is about.
+     *
+     * A named level wins outright — "varsity volleyball's next game" is Varsity's,
+     * whatever JV is doing sooner. A named sport gets every one of its levels, so
+     * a parent whose player is on the other team still sees their date. And with
+     * neither, "the next game" is the school's next game: one date, not the next
+     * fixture of all twelve sports in a list nobody asked for. */
+    const askedLevels = levelsAskedFor(query, computed.map(e => e.level))
+    const scoped = askedLevels.length ? computed.filter(e => askedLevels.includes(e.level)) : computed
+    const MAX_NEXT_LEVELS = 8
+    const stated = (
+      matchedSport || askedLevels.length
+        ? scoped
+        : scoped.filter(e => e.ymd === scoped[0]?.ymd)
+    ).slice(0, MAX_NEXT_LEVELS)
 
-    if (earliest.size) {
+    if (stated.length) {
+      const keep = new Set(stated.flatMap(e => e.lines))
       let removed = 0
       answerContext = context
         .split('\n')
         .filter(raw => {
           const line = raw.trim()
-          const date = line.match(DATED_LINE)?.[1]
-          if (!date) return true // prose, headings, source markers — always kept
-          const level = line.match(/^\[([^\]]+)\]/)?.[1] ?? '(untagged)'
-          // Keep a dated line only if it is the earliest upcoming one of the
-          // kind asked about for its own team. Past dates and later dates go,
-          // and so does the other kind — a tryout is not an answer to "when is
-          // the next game", and it is what the annotated version handed over.
-          const keep = date >= todayYmd && wanted(line) && earliest.get(level) === date
-          if (!keep) removed++
-          return keep
+          if (!DATED_LINE.test(line)) return true // prose, headings, source markers — always kept
+          // Keep a dated line only if it is one of the computed answers. Past
+          // dates and later dates go, and so does the other kind — a tryout is
+          // not an answer to "when is the next game", and it is what the
+          // annotated version handed over.
+          if (keep.has(line)) return true
+          removed++
+          return false
         })
         .join('\n')
 
-      const kind = asksPractice ? 'practice or training session' : 'game or competition'
+      /* The computed lines are put *into* the context, not offered beside it.
+       *
+       * A previous attempt appended the correct answers to the prompt and asked
+       * the model to prefer them. It fixed the headline and was overridden in the
+       * detail — Varsity volleyball still came back as 8 September with the
+       * 20 August line sitting both in the context and in the note above it. What
+       * works is leaving nothing else to read: these lines are the only dated
+       * events left, and the ones retrieval missed are now among them. */
+      const missing = stated.flatMap(e => e.lines).filter(l => !answerContext.includes(l))
+      if (missing.length) {
+        answerContext += `\n\n---\n\n[Source: the next ${kind} for each team, from the complete TCA athletics schedule]\n` +
+          missing.join('\n')
+      }
+
+      const kindLabel = asksPractice ? 'practice or training session' : 'game or competition'
       nextNote =
-        /* Scoped to what was retrieved, and it says so.
-         *
-         * The filter can only sort the lines it was given. Asked "when is the
-         * next volleyball game" the retrieved set did not include the chunk
-         * holding Varsity's 20 August fixture, so the earliest Varsity line
-         * present was 8 September — and an earlier draft of this note declared
-         * that "these ARE the next ones", turning a retrieval gap into a
-         * confident wrong answer. Asked "next *varsity* volleyball game" the
-         * right chunk is retrieved and the answer is correct, which is the tell:
-         * the sorting is sound, the input is not always complete.
-         *
-         * So the note claims only what it can support. The later dates are still
-         * removed, so no later date can be quoted; what is no longer claimed is
-         * that nothing earlier exists elsewhere in the schedule. */
-        `This question asked for the next ${kind}. Among the schedules retrieved for it, every dated event ` +
-        `that is not the earliest upcoming ${kind} for its own team has been removed from your context ` +
-        `(${removed} lines), so no later date is available to quote.\n` +
+        (complete
+          /* The strong claim, and what earns it.
+           *
+           * An earlier draft of this note said "these ARE the next ones" while the
+           * filter could only sort what retrieval happened to return, which turned
+           * a retrieval gap into a confident wrong answer. The claim is safe now
+           * for the reason it was not then: the list is built from the schedule
+           * documents themselves, read in full and in order, rather than from the
+           * chunks that placed. */
+          ? `This question asked for the next ${kindLabel}. The events below were computed from TCA's complete ` +
+            `athletics schedule, in date order, and they ARE the next ones for the teams named — state them as the ` +
+            `answer. Every other dated event has been removed from your context (${removed} lines), so no other ` +
+            `date is available to quote.\n`
+          : `This question asked for the next ${kindLabel}. Among the schedules retrieved for it, every dated event ` +
+            `that is not the earliest upcoming ${kindLabel} for its own team has been removed from your context ` +
+            `(${removed} lines), so no later date is available to quote. An earlier event may exist in a schedule ` +
+            `that was not retrieved, so do not claim nothing comes sooner.\n`) +
         /* Two failures this paragraph is written against, both observed. Told to
          * use the weekday "as written", the model wrote "Tuesday, August 20
          * (Thu)" — it copied the parenthetical through into the answer and put
@@ -1068,7 +1158,7 @@ export async function POST(req: NextRequest) {
          * asked about, it named only JV when Varsity played the same afternoon,
          * because a sport with no level named is not one team. */
         `- The day of the week is the one in parentheses on the line. Say that day and no other, ` +
-        `and write it out in prose ("Thursday, August 20") rather than copying the "(Thu)" through.\n` +
+        `and write it out in prose ("Thursday, August 20") rather than copying the "(Thursday)" through.\n` +
         `- If the parent named a level, answer for that level. If they named only a sport and several ` +
         `teams appear below, the next one is whichever is earliest — say so, and then list the other ` +
         `teams playing on that same date, because a parent with a player on one of them needs their time too.\n` +
@@ -1419,6 +1509,7 @@ Answer style:
       .from('page_chunks')
       .select('title')
       .ilike('url', '%teamreach%')
+      .order('id')
       .limit(200)
     coveredTeams = [...new Set((trRows ?? [])
       .map(r => String(r.title ?? '').split('—')[0].trim())
@@ -1534,6 +1625,15 @@ ${coverageNote}`,
         const stream = anthropic.messages.stream({
           model: MODEL,
           max_tokens: 1024,
+          /* Nothing here benefits from sampling.
+           *
+           * The default is 1.0, so the same question over the same context could
+           * be written two ways — and on a list of dates, "written two ways" means
+           * a different date chosen. This is a retrieval app: the context decides
+           * the answer and the wording is not where the value is. A parent who
+           * re-asks to check what they read should get the same answer back,
+           * which is most of what "reliable" means here. */
+          temperature: 0,
           system: systemBlocks,
           messages: anthropicMessages,
         })
