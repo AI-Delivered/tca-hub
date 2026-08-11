@@ -276,6 +276,133 @@ export function weekdayNote(context: string): string {
     `name at all.${conflicts.length ? `\n${conflicts.join('\n')}` : ''}`
 }
 
+/* Checking the answer itself, on the way out, before a parent can read it.
+ *
+ * Everything above this line makes a wrong day name less likely: the day is
+ * written into the schedule line at ingest, the pairings are computed and handed
+ * over, and the prompt says not to derive one. None of that is a guarantee, and a
+ * day that contradicts its own date is the specific thing that makes an answer
+ * read as untrustworthy — "Thursday, August 28, 2026" is self-evidently broken to
+ * anyone holding a calendar, whichever half is wrong. A parent who spots one stops
+ * believing the times too.
+ *
+ * So the last word belongs to code. Every "Thursday, August 28" in an answer is
+ * checked against the calendar, and what happens next depends on whether the date
+ * is one the retrieved context actually contained:
+ *
+ *   The date is in the context — the date is real and came from the data, so the
+ *   day name is the half that is wrong, and it is corrected to the day that date
+ *   falls on.
+ *
+ *   The date is not in the context — nothing here knows whether the model meant
+ *   the 27th or the 28th, so nothing is asserted: the day name comes off and the
+ *   date stands alone. Correcting the day name here would turn a visibly broken
+ *   answer into a plausible wrong one, which is worse, and the pair is reported so
+ *   it stops being invisible.
+ *
+ * This runs mid-stream, so the check has to be safe on a partial answer. That is
+ * what `heldBackFrom` is for: text is only released up to the point where a date
+ * phrase could still be forming.
+ */
+const ANSWER_DATE = new RegExp(
+  String.raw`\b(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)\b(,?\s+)` +
+  String.raw`(January|February|March|April|May|June|July|August|September|October|November|December` +
+  String.raw`|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)\.?\s+(\d{1,2})(?:st|nd|rd|th)?` +
+  String.raw`(?:(,?\s+)(20\d{2}))?`,
+  'gi'
+)
+
+/** How far back a date phrase can reach: `Wednesday, September 28th, 2026` and a little slack. */
+const MAX_PHRASE_CHARS = 40
+
+/** Any text that could still grow into a date phrase, so it is not released yet.
+ *
+ * Returns the index to stop at, or the length of the text when all of it is safe
+ * to send. Only the last candidate can be incomplete — anything earlier has
+ * whatever follows it already in hand. */
+export function heldBackFrom(text: string): number {
+  // Enough of a day name to be recognisable, anywhere in the tail — this is the
+  // one that keeps a whole `Thursday, August 28` together while the date arrives.
+  let last = -1
+  for (const m of text.matchAll(/\b(?:sun|mon|tues?|wed(?:nes)?|thur?s?|fri|satur?)/gi)) last = m.index
+  if (last >= 0 && text.length - last < MAX_PHRASE_CHARS) return last
+
+  /* Or as little as a single letter, when the text ends mid-word.
+   *
+   * Found by running this over every chunk boundary rather than the convenient
+   * one. A model streams `JH Picture Day is **T` and then `hursday` — and `T`
+   * alone is not recognisable as the start of anything, so it went out, and the
+   * `hursday` that followed had nothing in front of it to match. The phrase was
+   * checked in two halves, which is to say not checked, and "Thursday, August 28"
+   * reached the browser on roughly a third of the chunk widths tried. */
+  const tail = /\b([A-Za-z]+)$/.exec(text)
+  const partial = tail?.[1].toLowerCase() ?? ''
+  if (partial && WEEKDAYS.some(day => day.toLowerCase().startsWith(partial))) return tail!.index
+  return text.length
+}
+
+export interface DateCheck {
+  /** The answer text, with contradictions resolved. */
+  text: string
+  /** Day names corrected because the date behind them was real. */
+  corrected: Array<{ was: string; now: string }>
+  /** Pairs whose date the context did not contain — the day name was dropped. */
+  unsupported: Array<{ was: string; now: string }>
+}
+
+/** Which year a bare "August 28" means, preferring a year the context actually has. */
+function resolveYear(month: number, day: number, today: string, contextDates: Set<string>): number {
+  const ymd = (y: number) => `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  const thisYear = Number(today.slice(0, 4))
+  const candidates = [thisYear, thisYear + 1, thisYear - 1]
+  const known = candidates.filter(y => contextDates.has(ymd(y)))
+  if (known.length === 1) return known[0]
+  // Nothing in the context to go on: the nearest occurrence to today, which is how
+  // a parent reads an undated "August 28" in a newsletter.
+  const todayMs = Date.parse(`${today}T00:00:00Z`)
+  return (known.length ? known : candidates)
+    .reduce((best, y) =>
+      Math.abs(Date.parse(`${ymd(y)}T00:00:00Z`) - todayMs) < Math.abs(Date.parse(`${ymd(best)}T00:00:00Z`) - todayMs)
+        ? y : best)
+}
+
+const MONTH_INDEX_LONG = new Map(MONTHS.map((name, i) => [name.slice(0, 3).toLowerCase(), i]))
+
+/** Resolve every day/date pair in an answer against the calendar. */
+export function checkAnswerDates(
+  text: string,
+  opts: { today: string; contextDates: Set<string> }
+): DateCheck {
+  const corrected: Array<{ was: string; now: string }> = []
+  const unsupported: Array<{ was: string; now: string }> = []
+
+  const fixed = text.replace(ANSWER_DATE, (match, dow, gap, month, day, yearGap, year) => {
+    const monthIndex = MONTH_INDEX_LONG.get(String(month).slice(0, 3).toLowerCase())
+    if (monthIndex === undefined) return match
+    const resolvedYear = year
+      ? Number(year)
+      : resolveYear(monthIndex + 1, Number(day), opts.today, opts.contextDates)
+    const ymd = `${resolvedYear}-${String(monthIndex + 1).padStart(2, '0')}-${String(Number(day)).padStart(2, '0')}`
+    const actual = weekdayFor(ymd)
+    // Not a real date at all (February 30) — leave the text alone rather than
+    // rewrite around a date nothing can check.
+    if (!actual) return match
+    if (actual.toLowerCase() === String(dow).toLowerCase()) return match
+
+    // Everything after the day name, kept exactly as the model wrote it.
+    const rest = match.slice(String(dow).length + String(gap).length)
+    if (opts.contextDates.has(ymd)) {
+      const now = `${actual}${gap}${rest}`
+      corrected.push({ was: match, now })
+      return now
+    }
+    unsupported.push({ was: match, now: rest })
+    return rest
+  })
+
+  return { text: fixed, corrected, unsupported }
+}
+
 /* Answering "when is the next game" from the whole schedule instead of a slice of it.
  *
  * Reported: the same question, asked twice, named two different games — Varsity

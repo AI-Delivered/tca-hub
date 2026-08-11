@@ -6,7 +6,8 @@ import { logQuery } from '@/lib/query-log'
 import { rateLimit, tooManyRequests } from '@/lib/rate-limit'
 import { secretMatches } from '@/lib/auth'
 import {
-  DATED_LINE, weekdayNote, assembleByUrl, datedLines, nextEventsByLevel, levelsAskedFor,
+  DATED_LINE, weekdayNote, assembleByUrl, datedLines, datesIn, nextEventsByLevel, levelsAskedFor,
+  checkAnswerDates, heldBackFrom,
 } from '@/lib/schedule'
 
 export const maxDuration = 60
@@ -1613,7 +1614,38 @@ ${coverageNote}`,
         if (staffCards.length) controller.enqueue(send({ type: 'staffCards', staffCards }))
       }
 
+      /* The day/date check, applied to the stream rather than to the finished text.
+       *
+       * A day name that contradicts its own date is the thing that makes an answer
+       * read as untrustworthy, and by the time the whole answer exists the browser
+       * has already shown it — there is no taking it back. So the text is released
+       * in pieces up to the last point where a date phrase could still be forming
+       * (`heldBackFrom`), each piece is resolved against the calendar and the dates
+       * the context actually contained, and only then does it go out. The holdback
+       * is at most forty characters, and only ever behind a word that looks like
+       * the start of a day name.
+       *
+       * `answerText` accumulates the *checked* text, so what is cached, logged,
+       * cited and read out to a parent are all the same words. */
       let answerText = ''
+      const contextDates = new Set(datesIn(answerContext).map(d => d.ymd))
+      const dateFixes: Array<{ was: string; now: string }> = []
+      const unsupportedDates: Array<{ was: string; now: string }> = []
+      let pending = ''
+
+      const release = (final: boolean) => {
+        const cut = final ? pending.length : heldBackFrom(pending)
+        if (cut <= 0) return
+        const checked = checkAnswerDates(pending.slice(0, cut), { today: todayYmd, contextDates })
+        pending = pending.slice(cut)
+        dateFixes.push(...checked.corrected)
+        unsupportedDates.push(...checked.unsupported)
+        if (!checked.text) return
+        answerText += checked.text
+        controller.enqueue(send({ type: 'text', text: checked.text }))
+        pushCards()
+      }
+
       let failure = ''
       let usage: {
         input_tokens?: number
@@ -1644,9 +1676,8 @@ ${coverageNote}`,
             event.delta.type === 'text_delta' &&
             event.delta.text
           ) {
-            answerText += event.delta.text
-            controller.enqueue(send({ type: 'text', text: event.delta.text }))
-            pushCards()
+            pending += event.delta.text
+            release(false)
           }
           if (event.type === 'message_delta' && event.usage) {
             usage = { ...usage, output_tokens: event.usage.output_tokens }
@@ -1663,6 +1694,8 @@ ${coverageNote}`,
             }
           }
         }
+        // Whatever is still held back behind a possible date phrase.
+        release(true)
       } catch (e) {
         // A parent should never see an API error, and definitely never a billing
         // one — this used to surface "Your credit balance is too low to access
@@ -1673,6 +1706,8 @@ ${coverageNote}`,
         // Retrieval doesn't touch Anthropic, so the data is sitting right here.
         // For the questions we can answer straight from it — who someone is, how
         // to reach them — compose the answer ourselves rather than apologising.
+        // The part of the answer that did arrive is still owed the check.
+        release(true)
         const fromData = answerFromData()
         const fallback = fromData
           ?? (sources.length
@@ -1689,9 +1724,28 @@ ${coverageNote}`,
       sources = sourcesFor(answerText)
       controller.enqueue(send({ type: 'sources', sources }))
 
-      // Only a real generation is worth caching — never an outage message, and
-      // never a follow-up whose meaning depends on the turn before it.
-      if (cacheable && !failure && answerText.trim().length > 20) {
+      /* What the date check found, in the server log where it can be acted on.
+       *
+       * A corrected day name is the check doing its job. A date the retrieved
+       * context did not contain is something else: the model produced a date that
+       * is not in the calendar it was given, and the day name was dropped rather
+       * than dressed up. That is worth seeing, and worth not repeating — an answer
+       * standing on a date nothing supports does not go in the cache, where it
+       * would be replayed to every parent who asks the same thing for an hour. */
+      if (dateFixes.length) {
+        console.error(`date check corrected ${dateFixes.length} day name(s) for "${loggedQuery}":`,
+          dateFixes.map(f => `${f.was} -> ${f.now}`).join('; '))
+      }
+      if (unsupportedDates.length) {
+        console.error(`date check found ${unsupportedDates.length} unsupported date(s) for "${loggedQuery}" ` +
+          `— not in the retrieved context, day name dropped:`,
+          unsupportedDates.map(f => f.was).join('; '))
+      }
+
+      // Only a real generation is worth caching — never an outage message, never a
+      // follow-up whose meaning depends on the turn before it, and never an answer
+      // resting on a date the context did not have.
+      if (cacheable && !failure && !unsupportedDates.length && answerText.trim().length > 20) {
         const ttl = VOLATILE_RE.test(query) ? VOLATILE_TTL : STABLE_TTL
         cache.set(cacheKey, {
           answer: answerText,
