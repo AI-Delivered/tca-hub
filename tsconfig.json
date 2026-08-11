@@ -6,6 +6,10 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
+    // Lib-to-lib imports name the .ts file, so scripts/*.mjs can run them through
+    // node's type stripping — which has no tsconfig path aliases to resolve. Legal
+    // here because nothing is emitted from this config; Next does its own build.
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
