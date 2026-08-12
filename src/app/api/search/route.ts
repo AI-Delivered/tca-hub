@@ -1703,15 +1703,19 @@ ${coverageNote}`,
         const stream = anthropic.messages.stream({
           model: MODEL,
           max_tokens: 1024,
-          /* Nothing here benefits from sampling.
+          /* No temperature. There is no sampling knob to set here.
            *
-           * The default is 1.0, so the same question over the same context could
-           * be written two ways — and on a list of dates, "written two ways" means
-           * a different date chosen. This is a retrieval app: the context decides
-           * the answer and the wording is not where the value is. A parent who
-           * re-asks to check what they read should get the same answer back,
-           * which is most of what "reliable" means here. */
-          temperature: 0,
+           * `temperature: 0` used to pin this down — a parent who re-asks to check
+           * what they read should get the same answer back, and on a list of dates
+           * "written two ways" can mean a different date chosen. But the Claude 5
+           * models removed temperature/top_p/top_k, and sending one is a 400, not
+           * an ignored field: every escalated question died in the catch below and
+           * answered "the assistant is temporarily unavailable" instead.
+           *
+           * So repeat-question consistency rests on what the app actually controls:
+           * the answer cache serves the same text for the same question, and the
+           * date check downstream drops a day name the retrieved calendar does not
+           * support rather than letting a re-worded answer invent one. */
           system: systemBlocks,
           messages: anthropicMessages,
         })
