@@ -1333,7 +1333,7 @@ export async function POST(req: NextRequest) {
     },
   ]
 
-  const systemPrompt = `You are a helpful assistant for TCA (The Classical Academy) in Colorado Springs. Be warm and conversational — like a knowledgeable friend who knows TCA inside and out. You do not know who the user is or which student they have. Never say "your team", "your student", "your child", or "your next game" unless they've explicitly told you their grade or campus in this conversation. Always refer to teams by name: "TCA football", "the JH A team", "TCA Volleyball Varsity", etc. If two calendar sources show different times for the same event, say so: "GoBound shows 8:30 AM; TeamReach lists it as tentative at 9:00 AM — confirm with the coach."
+  const systemPrompt = `You are a helpful assistant for TCA (The Classical Academy) in Colorado Springs. Be warm and conversational — like a knowledgeable friend who knows TCA inside and out. You do not know who the user is or which student they have. Never say "your team", "your student", "your child", or "your next game" unless they've explicitly told you their grade or campus in this conversation. They have also not sent you any documents: never describe the context as something they shared, provided, posted or gave you — no "the schedule you shared", "the pages you provided", "the minutes you posted". They asked a question of a website. Name the source instead ("the GoBound schedule", "the East Elementary staff directory"), or say the information is not published there. Always refer to teams by name: "TCA football", "the JH A team", "TCA Volleyball Varsity", etc. If two calendar sources show different times for the same event, say so: "GoBound shows 8:30 AM; TeamReach lists it as tentative at 9:00 AM — confirm with the coach."
 
 HARD RULE: Do not ask follow-up questions. Ever. Do not end with "Is there anything else I can help you with?", "Is that who you're looking for?", "Does that help?", or any question. Answer, then stop.
 
@@ -1660,7 +1660,45 @@ ${coverageNote}`,
   // to 4,096: another block of prompt this size crosses the Haiku floor on its
   // own, which would be an improvement, not a regression.
   const isHardCase = topSimilarity < 0.55 || history.length >= 6
-  const MODEL = isHardCase ? 'claude-sonnet-5' : 'claude-haiku-4-5-20251001'
+
+  /* Debug-only model override, used by scripts/compare-models.mjs to A/B the
+   * easy path in either direction. Two locks, because whoever is asking is a
+   * parent unless proven otherwise:
+   *
+   *   - it is read only when `debug` is true, which the app's own client never
+   *     sends and which also bypasses the answer cache, so an override answer
+   *     can never be stored and served to someone else later;
+   *   - the value must appear in ALT_MODELS. An allow-list rather than a
+   *     validity check: an unpinned alias like "gpt-5.4-nano" can be repointed
+   *     upstream at any time, so only dated snapshots are accepted and anything
+   *     else falls through to the normal choice. */
+  const ALT_MODELS = new Set([
+    'gpt-5.4-nano-2026-03-17',
+    'claude-haiku-4-5-20251001',
+    'claude-sonnet-5',
+  ])
+  const requested = debug ? String((body as { model?: unknown }).model ?? '') : ''
+  const altModel = ALT_MODELS.has(requested) ? requested : ''
+
+  /* The easy path runs on GPT-5.4 nano; hard cases still escalate to Sonnet.
+   *
+   * Measured on 24 replayed production questions before switching: nano priced
+   * 5.3x cheaper per call ($0.0023 vs $0.0123) at slightly lower latency, and
+   * declined to answer on 3 of the 4 questions the corpus genuinely cannot
+   * answer, against Haiku's 4. It is not strictly better — on the fourth it
+   * invented a plausible-sounding process rather than saying it did not know,
+   * which is the failure mode this app can least afford. `checkAnswerDates`
+   * below is the backstop that matters: it already caught nano writing "Monday,
+   * August 11" for a Tuesday and corrected it in flight.
+   *
+   * Watch the unsupported-date and gap-note counters after this ships; if the
+   * invention rate shows up above Haiku's on real traffic, put the easy path
+   * back by swapping this one string. */
+  const MODEL = altModel || (isHardCase ? 'claude-sonnet-5' : 'gpt-5.4-nano-2026-03-17')
+
+  // Which API to call is a property of the chosen model, not of how it was
+  // chosen — the override and the default both land here.
+  const isOpenAIModel = MODEL.startsWith('gpt-')
 
   // Stream the response
   const readableStream = new ReadableStream({
@@ -1722,6 +1760,84 @@ ${coverageNote}`,
         cache_read_input_tokens?: number
       } = {}
       try {
+        if (isOpenAIModel) {
+          /* OpenAI path. Deliberately built from the
+           * same `systemBlocks` and `anthropicMessages` the real path uses, so
+           * what is being measured is the model and not a second prompt that has
+           * drifted. Two shape differences are forced by the other API and are
+           * worth naming, because both flatter the comparison rather than the
+           * incumbent: OpenAI takes one system string, so the cache breakpoints
+           * collapse (nothing here is cached, which is the honest baseline for a
+           * first run), and content arrays become plain text. */
+          const res = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY ?? ''}`,
+            },
+            body: JSON.stringify({
+              model: MODEL,
+              temperature: 0,
+              // Not `max_tokens` — this model rejects the legacy name outright.
+              max_completion_tokens: 1024,
+              stream: true,
+              stream_options: { include_usage: true },
+              messages: [
+                { role: 'system', content: systemBlocks.map(b => b.text).join('\n\n') },
+                ...anthropicMessages.map(m => ({
+                  role: m.role,
+                  content:
+                    typeof m.content === 'string'
+                      ? m.content
+                      : m.content.map(c => c.text).join('\n\n'),
+                })),
+              ],
+            }),
+          })
+          if (!res.ok || !res.body) {
+            throw new Error(`openai ${res.status}: ${(await res.text()).slice(0, 200)}`)
+          }
+
+          const reader = res.body.getReader()
+          const decoder = new TextDecoder()
+          let buffered = ''
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffered += decoder.decode(value, { stream: true })
+            // Keep the trailing fragment: an SSE line can split across reads.
+            const lines = buffered.split('\n')
+            buffered = lines.pop() ?? ''
+            for (const line of lines) {
+              const trimmed = line.trim()
+              if (!trimmed.startsWith('data:')) continue
+              const payload = trimmed.slice(5).trim()
+              if (payload === '[DONE]') continue
+              let event: {
+                choices?: { delta?: { content?: string } }[]
+                usage?: {
+                  prompt_tokens?: number
+                  completion_tokens?: number
+                  prompt_tokens_details?: { cached_tokens?: number }
+                }
+              }
+              try { event = JSON.parse(payload) } catch { continue }
+              const delta = event.choices?.[0]?.delta?.content
+              if (delta) {
+                pending += delta
+                release(false)
+              }
+              if (event.usage) {
+                usage = {
+                  input_tokens: event.usage.prompt_tokens ?? 0,
+                  output_tokens: event.usage.completion_tokens ?? 0,
+                  cache_creation_input_tokens: 0,
+                  cache_read_input_tokens: event.usage.prompt_tokens_details?.cached_tokens ?? 0,
+                }
+              }
+            }
+          }
+        } else {
         const stream = anthropic.messages.stream({
           model: MODEL,
           max_tokens: 1024,
@@ -1761,6 +1877,7 @@ ${coverageNote}`,
               cache_read_input_tokens: event.message.usage.cache_read_input_tokens ?? 0,
             }
           }
+        }
         }
         // Whatever is still held back behind a possible date phrase.
         release(true)
