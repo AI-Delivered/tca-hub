@@ -15,19 +15,27 @@
  * number — the failure mode that hid the nano bug in the first place.
  */
 
+/* The numbers themselves live in model-rates.json, not here, because
+ * scripts/lib/ask.mjs needs them too and cannot import TypeScript. JSON is the
+ * one format both sides read without a build step, so there is exactly one
+ * place to edit when a rate changes or a model is added.
+ *
+ * Note on Sonnet 5: listed at its standard 3.00/15.00. It is on an introductory
+ * 2.00/10.00 through 2026-08-31, so totals currently overstate Sonnet slightly
+ * and become exact when the intro rate lapses. Deliberately not date-switched —
+ * pricing historical rows correctly would mean keying off each row's timestamp,
+ * which is worth doing only if the intro period is ever extended. */
+import rates from './model-rates.json'
+
 /** Published rates in USD per million tokens, keyed by the exact `model` string
  *  written to query_log. */
-export const PRICING: Record<string, { input: number; output: number }> = {
-  'claude-haiku-4-5-20251001': { input: 1.0, output: 5.0 },
-  'claude-sonnet-5': { input: 3.0, output: 15.0 },
-  'gpt-5.4-nano-2026-03-17': { input: 0.2, output: 1.25 },
-}
+export const PRICING: Record<string, { input: number; output: number }> = rates.models
 
 /* Cache tokens bill at a multiple of the input rate: writing an entry costs
  * 1.25x, reading one costs 0.1x. Counting them as free understates every cached
  * request; `input_tokens` is only the uncached remainder once caching is on. */
-export const CACHE_WRITE_MULTIPLIER = 1.25
-export const CACHE_READ_MULTIPLIER = 0.1
+export const CACHE_WRITE_MULTIPLIER = rates.cacheWriteMultiplier
+export const CACHE_READ_MULTIPLIER = rates.cacheReadMultiplier
 
 export interface PricedRow {
   model?: string | null

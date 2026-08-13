@@ -111,28 +111,51 @@ export async function ask(base, query, { history = [] } = {}) {
 }
 
 /* Published per-million rates, only for turning logged token counts into a
- * dollar figure at the end of a run. Sonnet 5 is at its introductory rate
- * through 2026-08-31; after that it is 3/15 and this will understate. */
-const PRICES = {
-  'claude-haiku-4-5-20251001': { in: 1.00, out: 5.00 },
-  'claude-sonnet-5': { in: 2.00, out: 10.00 },
-}
+ * dollar figure at the end of a run.
+ *
+ * Read from the same src/lib/model-rates.json the app's own pricing imports,
+ * rather than kept as a copy here. There were three tables — this one and one
+ * in each of /api/admin/stats and /api/admin/queries — and they disagreed:
+ * two priced Sonnet 5 differently, none knew about GPT-5.4 nano, and all three
+ * fell back to Haiku for anything unrecognised, so nano runs were reported at
+ * roughly five times what they cost. JSON because this file is .mjs and cannot
+ * import the TypeScript module. */
+const RATES = JSON.parse(
+  fs.readFileSync(path.join(ROOT, 'src/lib/model-rates.json'), 'utf8')
+)
 
 /**
  * What a run actually cost, read from query_log rather than estimated.
+ *
  * Cache hits log zero tokens, so they contribute nothing, which is correct.
+ * Cache *creation* and *read* tokens are billed though, at 1.25x and 0.1x the
+ * input rate, and are counted here — leaving them out understated every cached
+ * request. `unpriced` counts rows whose model has no published rate: a visible
+ * gap, rather than a total that silently drops them or charges a neighbour's
+ * price, which is the bug this replaced.
  */
 export async function costSince(db, sinceISO) {
   const rows = await db.selectAll(
     'query_log',
-    `created_at=gte.${sinceISO}&select=model,input_tokens,output_tokens,cache_hit`
+    `created_at=gte.${sinceISO}&select=model,input_tokens,output_tokens,` +
+      `cache_creation_input_tokens,cache_read_input_tokens,cache_hit`
   )
-  let usd = 0, tokensIn = 0, tokensOut = 0
+  let usd = 0, tokensIn = 0, tokensOut = 0, unpriced = 0
   for (const r of rows) {
-    const p = PRICES[r.model] ?? PRICES['claude-haiku-4-5-20251001']
     tokensIn += r.input_tokens ?? 0
     tokensOut += r.output_tokens ?? 0
-    usd += ((r.input_tokens ?? 0) * p.in + (r.output_tokens ?? 0) * p.out) / 1e6
+    // '-failed' rows log no tokens, but strip the suffix anyway so a partially
+    // billed failure prices correctly instead of falling through as unknown.
+    const p = RATES.models[String(r.model ?? '').replace(/-failed$/, '')]
+    if (!p) {
+      if (r.input_tokens != null || r.output_tokens != null) unpriced++
+      continue
+    }
+    usd +=
+      ((r.input_tokens ?? 0) * p.input +
+        (r.cache_creation_input_tokens ?? 0) * p.input * RATES.cacheWriteMultiplier +
+        (r.cache_read_input_tokens ?? 0) * p.input * RATES.cacheReadMultiplier +
+        (r.output_tokens ?? 0) * p.output) / 1e6
   }
-  return { queries: rows.length, tokensIn, tokensOut, usd }
+  return { queries: rows.length, tokensIn, tokensOut, usd, unpriced }
 }
