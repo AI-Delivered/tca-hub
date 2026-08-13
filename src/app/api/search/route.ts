@@ -6,7 +6,7 @@ import { logQuery } from '@/lib/query-log'
 import { rateLimit, tooManyRequests } from '@/lib/rate-limit'
 import { secretMatches } from '@/lib/auth'
 import {
-  DATED_LINE, weekdayNote, assembleByUrl, datedLines, datesIn, nextEventsByLevel, levelsAskedFor,
+  DATED_LINE, weekdayNote, assembleByUrl, datedLines, datesIn, eventsInRange, nextEventsByLevel, levelsAskedFor,
   checkAnswerDates, heldBackFrom,
 } from '@/lib/schedule'
 
@@ -1505,19 +1505,42 @@ Answer style:
   if (askedRange && contextHasSchedule) {
     const [from, to] = RANGES[askedRange]()
     const lo = ymd(from), hi = ymd(to)
-    const inRange = [...new Set(
-      rangeSource.split('\n')
-        .map(l => l.trim())
-        .filter(l => { const d = l.match(DATED_LINE)?.[1]; return d !== undefined && d >= lo && d <= hi })
-    )].sort()
+    /* Ordered by date and narrowed to the sport asked about — see eventsInRange.
+     *
+     * Sorting the lines as text put every ical line, which is where the
+     * level-tagged games are, below every scrape line, and the cap then cut them
+     * off: "are there any volleyball matches next week" denied three levels playing
+     * Palmer Ridge on 20 August while the practices from the same week came
+     * through. */
+    const { events, total } = eventsInRange(rangeSource, { from: lo, to: hi, sport: matchedSport })
+    // Still capped so a busy week cannot crowd out the retrieved pages themselves,
+    // but the cap is now told to the model instead of silently ending the list.
+    const MAX_RANGE_LINES = 80
+    const shown = events.slice(0, MAX_RANGE_LINES)
+    const truncated = total > shown.length
+    const scopeLabel = matchedSport ? `the complete ${matchedSport} schedule` : 'the complete schedule'
 
     const label = `${askedRange} (${lo} to ${hi})`
-    rangeNote = inRange.length
-      // Capped so a busy week cannot crowd out the retrieved pages themselves.
-      ? `Dated events for ${label}, computed from ${rangeComplete ? 'the complete schedule for the activity asked about' : 'your context'}${rangeComplete ? ' and COMPLETE' : ''}:\n${inRange.slice(0, 60).join('\n')}\n\nAnswer only from these lines. If the team or activity the parent asked about does not appear above, then nothing is scheduled for it in that range and you must say so plainly. Never move an event from another week onto these dates, and never combine a date from this list with a time from elsewhere.`
+    rangeNote = shown.length
+      ? `Dated events for ${label}, computed from ${rangeComplete ? scopeLabel : 'your context'}` +
+        `${rangeComplete && !truncated ? ' and COMPLETE' : ''}:\n${shown.map(e => e.line).join('\n')}\n\n` +
+        `Answer only from these lines. Never move an event from another week onto these dates, and never ` +
+        `combine a date from this list with a time from elsewhere.\n` +
+        /* The absence claim is only made over a list that is actually complete.
+         *
+         * It used to be made unconditionally, including over a list cut at sixty
+         * — which is how a truncated list became "nothing is scheduled for it".
+         * That is the worst answer this app can give: a wrong time gets checked,
+         * and a parent told there is nothing on does not look again. */
+        (rangeComplete && !truncated
+          ? `If the team or activity the parent asked about does not appear above, then nothing is ` +
+            `scheduled for it in that range and you must say so plainly.`
+          : `This list is not everything — ${truncated ? `${total - shown.length} more events in that range are not shown` : 'it was built from the pages retrieved rather than the whole schedule'}. ` +
+            `If what the parent asked about is not above, say you cannot see it listed and point them to the ` +
+            `schedule. Do NOT say nothing is scheduled.`)
       : rangeComplete
         // Only assertable because the whole schedule was searched, not a slice.
-        ? `The complete schedule for the activity asked about contains NO events for ${label}. Say plainly that nothing is listed for that period. Do not construct an event for it from a recurring pattern in another week — if you name the next scheduled dates instead, label them with the week they are actually in.`
+        ? `${scopeLabel} contains NO events for ${label}. Say plainly that nothing is listed for that period. Do not construct an event for it from a recurring pattern in another week — if you name the next scheduled dates instead, label them with the week they are actually in.`
         : `No events for ${label} appear in the pages you were given, but those pages are not the whole schedule, so this is not evidence that nothing is on. Say that you cannot see anything listed for that period and point to the schedule rather than stating that the period is empty.`
   }
 

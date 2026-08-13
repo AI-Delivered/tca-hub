@@ -549,6 +549,41 @@ export function datedLines(text: string): DatedLine[] {
     a.ymd.localeCompare(b.ymd) || a.minutes - b.minutes || a.level.localeCompare(b.level) || a.line.localeCompare(b.line))
 }
 
+/* The events inside an asked-about range, in date order, optionally one sport.
+ *
+ * Reported from production, and the mechanism is in the two lines this replaces:
+ * "are there any volleyball matches next week" answered "next week (August 17-23)
+ * has no volleyball matches listed" while Palmer Ridge played Varsity, JV and
+ * C-Squad on 20 August. The lines were in the corpus, correctly formatted, and
+ * matched the event rule — and the practices from 17-19 August did come through,
+ * which is the tell.
+ *
+ * The list was `.sort()`ed on the whole line and then cut to sixty. GoBound's
+ * scrape writes `2026-08-17 (Monday) 3:30 PM — …`, which sorts under a digit; the
+ * ical documents write `[Volleyball Varsity (Girls)] 2026-08-20 (Thursday) …`,
+ * which sorts under `[`. Every scrape line therefore sorts before every ical line,
+ * a week of practices across eight sports fills sixty slots, and the level-tagged
+ * games fall off the end. The prompt then tells the model that anything not in the
+ * list is not scheduled, so a truncated list became a flat denial — and a parent
+ * told nothing is on does not look again.
+ *
+ * Three things had to change together. Ordered by date rather than by text, so no
+ * source can sort below another. Narrowed to the sport asked about, so a volleyball
+ * question is not competing with fifty football practices for the same slots. And
+ * the caller is told when the list was cut, because a truncated list cannot support
+ * "nothing else is scheduled" — that sentence is only safe over a complete one.
+ */
+export function eventsInRange(
+  text: string,
+  opts: { from: string; to: string; sport?: string }
+): { events: DatedLine[]; total: number } {
+  const inRange = datedLines(text).filter(l => l.ymd >= opts.from && l.ymd <= opts.to)
+  const scoped = opts.sport
+    ? inRange.filter(l => new RegExp(`\\b${opts.sport}\\b`, 'i').test(l.line))
+    : inRange
+  return { events: scoped, total: scoped.length }
+}
+
 /* What the two kinds of question are asking for.
  *
  * These moved out of the search route so the same test can hold them against the
