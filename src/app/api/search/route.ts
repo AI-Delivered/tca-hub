@@ -661,7 +661,21 @@ export async function POST(req: NextRequest) {
     keywordChunks = [...keywordChunks, ...daysOffChunks]
   }
 
-  const isSportsQuery = !daysOffQuery && SPORT_TERMS.some(t => hasTerm(query, t))
+  /* What the conversation is about, not what this sentence says.
+   *
+   * Retrieval has always worked this way — the embedding is built from
+   * `baseQuery`, the last user turn plus this one — but every rule below tested
+   * the bare `query`, so the two disagreed on follow-ups. "When are the next
+   * flag football games" then "what about the full schedule" retrieved flag
+   * football correctly and then scored `isSportsQuery` false and `matchedSport`
+   * null, so no GoBound anchor fired, the games-only rule stood down, and the
+   * answer named three dates out of fourteen. Naming the sport again in the same
+   * sentence returned thirteen — the whole difference was this line.
+   *
+   * A subject carries across turns; that is what a follow-up is. Deliberately
+   * not applied to `asksNext`, which must keep reading this turn alone or the
+   * "next" from a previous question would trim a request to widen the scope. */
+  const isSportsQuery = !daysOffQuery && SPORT_TERMS.some(t => hasTerm(baseQuery, t))
   const calTermMatch = !daysOffQuery ? CAL_EVENT_TERMS.find(t => hasTerm(query, t)) : undefined
 
   // Named sports only (excludes generic words like "game"/"practice"/"tournament") — used to
@@ -671,7 +685,11 @@ export async function POST(req: NextRequest) {
   // "when does track start" query is essentially a coin flip — the same query can surface it
   // one run and miss it the next. Anchor it by keyword the same way the Upcoming chunk is
   // anchored, instead of leaving it to embedding-ranking luck.
-  const matchedSport = SPORT_NAMES.find(t => hasTerm(query, t))
+  // This turn first, so "what about volleyball" after a football question
+  // switches sport rather than inheriting one; the conversation only supplies a
+  // subject the current sentence does not have. See `isSportsQuery` above.
+  const matchedSport =
+    SPORT_NAMES.find(t => hasTerm(query, t)) ?? SPORT_NAMES.find(t => hasTerm(baseQuery, t))
 
   /* The athletics schedule as whole documents, reassembled from their pieces.
    *
