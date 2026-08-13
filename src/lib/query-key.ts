@@ -86,3 +86,26 @@ export function queryKey(raw: string): string {
   // Order-insensitive: "Mrs Smith email" and "email for Mrs Smith" are one question.
   return [...new Set(tokens)].sort().join(' ')
 }
+
+/* The cache key for a generated answer, built in one place.
+ *
+ * It was assembled inline in the search route, which was fine while that route
+ * was the only thing that ever wrote one. Triage has to be able to *remove* one —
+ * an answer found to still carry a fault must stop being replayed to every parent
+ * who asks the same thing for the rest of the hour — and it can only do that if it
+ * can reconstruct the exact key.
+ *
+ * Scoped to the deployment, so shipping a fix takes effect immediately rather than
+ * being masked by entries the previous build generated, and to the day, so an
+ * answer about "the next game" can never be served across a date boundary.
+ */
+export const CACHE_VERSION = 'v1'
+
+export function buildId(): string {
+  return process.env.VERCEL_DEPLOYMENT_ID ?? process.env.VERCEL_GIT_COMMIT_SHA ?? 'dev'
+}
+
+/** @param dayIso Denver date, `YYYY-MM-DD` — the day the answer is valid for. */
+export function answerCacheKey(query: string, dayIso: string): string {
+  return `answer:${CACHE_VERSION}:${buildId()}:${dayIso}:${queryKey(query)}`
+}

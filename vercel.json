@@ -51,6 +51,10 @@
     {
       "path": "/api/audit",
       "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/triage",
+      "schedule": "0 15 * * *"
     }
   ]
 }
