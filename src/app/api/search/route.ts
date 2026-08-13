@@ -1329,7 +1329,15 @@ export async function POST(req: NextRequest) {
       // `answerContext`, not `context`: for a "when is the next …" question the
       // later dates have been removed above, so they are not available to quote.
       // Every other question gets the full context unchanged.
-      content: `Context from TCA website:\n\n${answerContext}\n\nQuestion: ${query}`,
+      /* The framing matters as much as the content. This block used to open
+       * "Context from TCA website:", which reads as the asker having attached
+       * the documents — so answers came back citing "the schedule you shared"
+       * and "the pages you provided". A parent asked a website a question; they
+       * have never seen these pages. Saying plainly who retrieved this, and that
+       * the asker cannot see it, fixes at the source what a prohibition in the
+       * system prompt could not (GPT-5.4 nano ignored one naming those exact
+       * words). Not cached, so the extra sentence costs nothing to reuse. */
+      content: `The search system retrieved the following from TCA's public pages to help answer the question at the end. The person asking did not provide, share, link or post any of it, and cannot see it — they typed only the question. Refer to these as sources you looked in ("the GoBound schedule", "the staff directory"), never as anything the reader gave you.\n\n${answerContext}\n\nQuestion: ${query}`,
     },
   ]
 
