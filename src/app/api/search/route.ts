@@ -1856,8 +1856,16 @@ ${coverageNote}`,
            * a different date chosen. This is a retrieval app: the context decides
            * the answer and the wording is not where the value is. A parent who
            * re-asks to check what they read should get the same answer back,
-           * which is most of what "reliable" means here. */
-          temperature: 0,
+           * which is most of what "reliable" means here.
+           *
+           * Sonnet 5 no longer accepts it. A non-default `temperature` is a 400
+           * ("`temperature` is deprecated for this model"), which the catch below
+           * turned into "the assistant is temporarily unavailable" on every hard
+           * case — a silent 17% of traffic, since the easy path never escalates.
+           * So it is sent only to the models that still take it. Sonnet answers
+           * are non-deterministic as a result; `checkAnswerDates` is what stands
+           * between that and a wrong date reaching a parent, not this line. */
+          ...(MODEL.startsWith('claude-haiku') ? { temperature: 0 } : {}),
           system: systemBlocks,
           messages: anthropicMessages,
         })
