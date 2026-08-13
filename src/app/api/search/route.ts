@@ -8,7 +8,7 @@ import { secretMatches } from '@/lib/auth'
 import { gapNoteFor, withGapNote } from '@/lib/unanswered'
 import {
   DATED_LINE, weekdayNote, assembleByUrl, datedLines, datesIn, eventsInRange, nextEventsByLevel, levelsAskedFor,
-  checkAnswerDates, heldBackFrom,
+  checkAnswerDates, heldBackFrom, isPractice,
 } from '@/lib/schedule'
 
 export const maxDuration = 60
@@ -1189,6 +1189,44 @@ export async function POST(req: NextRequest) {
         `teams playing on that same date, because a parent with a player on one of them needs their time too.\n` +
         `- Do not describe a full season or count how many events there are: the rest of the schedule ` +
         `is no longer in front of you, so any total you give would be wrong.`
+    }
+  }
+
+  /* "The <sport> schedule" means the games.
+   *
+   * GoBound publishes both kinds as dated lines in one document: 14 games per
+   * flag football team, and about fifty practices. Asked "what is the flag
+   * football schedule", the model was handed all eighty-one lines and answered
+   * with a blend that opened on a practice, so a parent checking when their
+   * daughter plays had to sort the games out themselves. The corpus was right
+   * and complete — 14 games per team, matching GoBound exactly — and the answer
+   * still failed, because nothing had said which kind was being asked for.
+   *
+   * Practices are removed rather than reordered. Telling the model to prefer
+   * games leaves the practice lines sitting in front of it, and it is not
+   * reliable at declining to quote a line it can see — the same reason the next-
+   * event rule above deletes rather than instructs.
+   *
+   * Narrow on purpose: a sport must be named, the question must not be about
+   * practice ("is there volleyball practice this week" keeps them), and the
+   * next-event rule must not have already rewritten the context, because only
+   * one of the two may or they subtract from each other. */
+  if (!asksNext && !asksPractice && matchedSport && /\b(schedule|games?|fixtures?)\b/i.test(query)) {
+    let droppedPractices = 0
+    const kept = answerContext.split('\n').filter(raw => {
+      const line = raw.trim()
+      if (!DATED_LINE.test(line)) return true // prose, headings, source markers
+      if (!isPractice(line)) return true
+      droppedPractices++
+      return false
+    })
+    if (droppedPractices) {
+      answerContext = kept.join('\n')
+      nextNote =
+        `This question asked for a schedule of games. Practice, tryout and scrimmage entries have been ` +
+        `removed from your context (${droppedPractices} lines), so none are available to quote — list the ` +
+        `games, and do not describe practices or say there are none. List every game left in the context ` +
+        `for the teams asked about rather than the next few: "the schedule" is the whole season.`
     }
   }
 
