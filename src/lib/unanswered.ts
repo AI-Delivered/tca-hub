@@ -79,3 +79,43 @@ export function unansweredOrFilter(column = 'answer_preview'): string {
 export function saidItCouldNotAnswer(answer: string | null | undefined): boolean {
   return UNANSWERED_RE.test(answer ?? '')
 }
+
+/* What to say when the answer is "we don't have that".
+ *
+ * A parent who asks something reasonable and is told the information is not here
+ * has no way to know whether that is a permanent hole or a gap that is being
+ * worked on, and the difference decides whether they come back. One line closes
+ * that, and it belongs in code rather than in the prompt for the same reason the
+ * day names do: an instruction to add a closing line holds most of the time, and
+ * "most of the time" is not a thing you can put in front of people.
+ *
+ * On the wording. The obvious phrasing — "we're working with TCA to get more data
+ * reliably" — claims a working relationship with the school, and this app's own
+ * system prompt says the opposite in as many words: not built, run, endorsed or
+ * approved by The Classical Academy, and never speaking as the school. A parent
+ * reading "we're working with TCA" would reasonably conclude the school is
+ * involved. So this says what is true without giving anything up: sources are
+ * still being added, and the person reading it is not being brushed off.
+ *
+ * If that relationship does exist, this is the one line to change — and the
+ * disclaimer in the system prompt should change with it, or the app contradicts
+ * itself in two places a parent can see.
+ */
+export const GAP_NOTE =
+  '*Not everything TCA publishes is in here yet — more sources are being added. Thanks for your patience.*'
+
+/** The answer with the note appended, if the answer is one that admits a gap.
+ *
+ * Idempotent: a cached answer already carries it, and a follow-up must not stack a
+ * second copy underneath the first. */
+export function withGapNote(answer: string): string {
+  const text = answer.trimEnd()
+  if (!text || !saidItCouldNotAnswer(text) || text.includes(GAP_NOTE)) return answer
+  return `${text}\n\n${GAP_NOTE}`
+}
+
+/** Just the part to append, for a streamed answer that has already gone out. */
+export function gapNoteFor(answer: string): string {
+  const withNote = withGapNote(answer)
+  return withNote === answer ? '' : withNote.slice(answer.trimEnd().length)
+}

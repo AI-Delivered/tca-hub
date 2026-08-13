@@ -5,6 +5,7 @@ import { answerCacheKey } from '@/lib/query-key'
 import { logQuery } from '@/lib/query-log'
 import { rateLimit, tooManyRequests } from '@/lib/rate-limit'
 import { secretMatches } from '@/lib/auth'
+import { gapNoteFor, withGapNote } from '@/lib/unanswered'
 import {
   DATED_LINE, weekdayNote, assembleByUrl, datedLines, datesIn, eventsInRange, nextEventsByLevel, levelsAskedFor,
   checkAnswerDates, heldBackFrom,
@@ -803,7 +804,9 @@ export async function POST(req: NextRequest) {
   ].filter(c => !isStaleCalendarChunk(c, now) && !isPriorSchoolYearChunk(c, now))
 
   if (!merged?.length) {
-    const noResultsAnswer = "I couldn't find information about that on the TCA website. Try rephrasing your question or visit tcatitans.org directly."
+    const noResultsAnswer = withGapNote(
+      "I couldn't find information about that on the TCA website. Try rephrasing your question or visit tcatitans.org directly."
+    )
     logQuery(supabase, {
       query: loggedQuery,
       had_results: false,
@@ -1784,6 +1787,23 @@ ${coverageNote}`,
           pushCards()
         }
         if (!fromData) controller.enqueue(send({ type: 'error', message: 'assistant unavailable' }))
+      }
+
+      /* The gap note, added here rather than asked for in the prompt.
+       *
+       * Only when the answer itself says the information is not there — the same
+       * patterns the dashboard counts gaps with, so what a parent is told and what
+       * gets measured cannot drift apart. Never on an outage: "the assistant is
+       * temporarily unavailable" is a different thing from "TCA has not published
+       * this", and telling someone to be patient about the wrong one is worse than
+       * saying nothing. Appended to `answerText` too, so the cached and logged copy
+       * read exactly as the parent's did. */
+      if (!failure) {
+        const note = gapNoteFor(answerText)
+        if (note) {
+          answerText += note
+          controller.enqueue(send({ type: 'text', text: note }))
+        }
       }
 
       sources = sourcesFor(answerText)
