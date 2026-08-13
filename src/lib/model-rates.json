@@ -2,8 +2,15 @@
   "cacheWriteMultiplier": 1.25,
   "cacheReadMultiplier": 0.1,
   "models": {
-    "claude-haiku-4-5-20251001": { "input": 1.0, "output": 5.0 },
-    "claude-sonnet-5": { "input": 3.0, "output": 15.0 },
-    "gpt-5.4-nano-2026-03-17": { "input": 0.2, "output": 1.25 }
+    "claude-haiku-4-5-20251001": [
+      { "from": "2000-01-01", "input": 1.0, "output": 5.0 }
+    ],
+    "claude-sonnet-5": [
+      { "from": "2000-01-01", "input": 2.0, "output": 10.0 },
+      { "from": "2026-09-01", "input": 3.0, "output": 15.0 }
+    ],
+    "gpt-5.4-nano-2026-03-17": [
+      { "from": "2000-01-01", "input": 0.2, "output": 1.25 }
+    ]
   }
 }

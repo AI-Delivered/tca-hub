@@ -124,6 +124,22 @@ const RATES = JSON.parse(
   fs.readFileSync(path.join(ROOT, 'src/lib/model-rates.json'), 'utf8')
 )
 
+/* The rate in force when a row was logged, mirroring priceFor() in
+ * src/lib/pricing.ts. Rates are a history because Sonnet 5 runs on an
+ * introductory 2.00/10.00 through 2026-08-31 and reverts to 3.00/15.00 after —
+ * a single figure is wrong on one side of that date whichever value you pick,
+ * and the flip would land silently. Pricing each row at its own date also keeps
+ * last month's totals stable instead of rewriting them when a price moves. */
+function rateFor(model, at) {
+  if (!model) return null
+  const periods = RATES.models[String(model).replace(/-failed$/, '')]
+  if (!periods?.length) return null
+  if (!at) return periods[periods.length - 1]
+  let chosen = periods[0]
+  for (const p of periods) if (p.from <= at) chosen = p
+  return chosen
+}
+
 /**
  * What a run actually cost, read from query_log rather than estimated.
  *
@@ -137,7 +153,7 @@ const RATES = JSON.parse(
 export async function costSince(db, sinceISO) {
   const rows = await db.selectAll(
     'query_log',
-    `created_at=gte.${sinceISO}&select=model,input_tokens,output_tokens,` +
+    `created_at=gte.${sinceISO}&select=model,created_at,input_tokens,output_tokens,` +
       `cache_creation_input_tokens,cache_read_input_tokens,cache_hit`
   )
   let usd = 0, tokensIn = 0, tokensOut = 0, unpriced = 0
@@ -146,7 +162,7 @@ export async function costSince(db, sinceISO) {
     tokensOut += r.output_tokens ?? 0
     // '-failed' rows log no tokens, but strip the suffix anyway so a partially
     // billed failure prices correctly instead of falling through as unknown.
-    const p = RATES.models[String(r.model ?? '').replace(/-failed$/, '')]
+    const p = rateFor(r.model, r.created_at)
     if (!p) {
       if (r.input_tokens != null || r.output_tokens != null) unpriced++
       continue

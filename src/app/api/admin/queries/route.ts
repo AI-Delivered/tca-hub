@@ -64,8 +64,11 @@ interface Row {
 // with migration 007; before it is applied Postgres rejects the whole select
 // rather than returning the columns it does have, so the fallback below drops
 // them and the UI degrades to what the legacy columns can say.
+// Cache token columns (migration 008) are here because cost is priced from all
+// three token counts, not just input_tokens — without them a cached row reported
+// a smaller number here than the same row did on the stats page.
 const FULL_COLUMNS =
-  'id, query, created_at, had_results, source_count, top_similarity, model, latency_ms, answer, answer_preview, sources, cache_hit, input_tokens, output_tokens'
+  'id, query, created_at, had_results, source_count, top_similarity, model, latency_ms, answer, answer_preview, sources, cache_hit, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens'
 const LEGACY_COLUMNS =
   'id, query, created_at, had_results, source_count, top_similarity, model, latency_ms, answer_preview, input_tokens, output_tokens'
 
