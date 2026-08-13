@@ -1866,6 +1866,19 @@ ${coverageNote}`,
            * are non-deterministic as a result; `checkAnswerDates` is what stands
            * between that and a wrong date reaching a parent, not this line. */
           ...(MODEL.startsWith('claude-haiku') ? { temperature: 0 } : {}),
+          /* Sonnet 5 turns adaptive thinking on when `thinking` is omitted, and
+           * max_tokens caps thinking *plus* answer text. On a hard case — which
+           * is the only kind Sonnet sees — a 30k-character context reliably ate
+           * the whole 1024-token budget on reasoning and returned an empty
+           * answer: no error, no text, 1024 output tokens billed, and the route
+           * logged it as a success with a zero-length answer. This app has never
+           * used thinking; Sonnet 5 enabling it by default is the regression, so
+           * it is turned back off rather than paid for with a larger budget.
+           *
+           * Accepted only at effort `high` or below, which is the default. If
+           * thinking is ever wanted here, raise max_tokens in the same change —
+           * the two are one setting, and 1024 is a budget for an answer alone. */
+          ...(MODEL.startsWith('claude-sonnet') ? { thinking: { type: 'disabled' as const } } : {}),
           system: systemBlocks,
           messages: anthropicMessages,
         })
