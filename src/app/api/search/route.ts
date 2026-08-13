@@ -1051,7 +1051,14 @@ export async function POST(req: NextRequest) {
    */
   const NEXT_KIND = {
     game: /\b(game|match|meet|contest|competition|tournament)\b/i,
-    practice: /\b(practice|tryouts?|scrimmage|weights|conditioning|training)\b/i,
+    /* Plurals are optional on every noun here, not just `tryouts?`.
+     *
+     * Without them "flag football practices schedule" and "schedule including
+     * practices" read as game questions, and the schedule rule below strips the
+     * practices out of the context — the parent asked for practices by name and
+     * was answered with games. `\bpractice\b` does not match "practices": the
+     * word boundary needs a non-word character after the "e". */
+    practice: /\b(practices?|tryouts?|scrimmages?|weights|conditioning|training)\b/i,
   }
   // What counts as a dated event — `DATED_LINE`, imported, because the ingest
   // routes that write these lines have to be checkable against the same rule.
