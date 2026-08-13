@@ -2,6 +2,7 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { queryKey } from '@/lib/query-key'
 import { saidItCouldNotAnswer } from '@/lib/unanswered'
 import { fetchAllUrls } from '@/lib/page-urls'
+import { costOfRow, type PricedRow } from '@/lib/pricing'
 
 interface IngestRunRow {
   id: number
@@ -26,67 +27,21 @@ import { secretMatches } from '@/lib/auth'
 
 export const maxDuration = 30
 
-/* Pricing per million tokens (input/output), keyed by the exact model string
- * written to query_log.
- *
- * Keyed rather than guessed. This used to be a two-entry table selected by
- * `model.includes('sonnet')`, which meant every other value on earth priced as
- * Haiku — so a run of gpt-5.4-nano rows was reported at five times its real
- * cost, silently and with no way to see it in the dashboard. A model missing
- * from this table is now left unpriced instead (see priceRows), which shows up
- * as "N of M priced" rather than as a wrong total presented as a right one. */
-const PRICING: Record<string, { input: number; output: number }> = {
-  'claude-haiku-4-5-20251001': { input: 1.0, output: 5.0 },
-  'claude-sonnet-5': { input: 3.0, output: 15.0 },
-  'gpt-5.4-nano-2026-03-17': { input: 0.2, output: 1.25 },
-}
-
-/* Rows log the model that generated the answer, including for cache hits, plus
- * a couple of synthetic values the route writes itself: 'cache' on the pre-token
- * -logging path and '<model>-failed' when generation errored. Failed rows log no
- * tokens so they never reach pricing, and the suffix is stripped here anyway so
- * a future partial-usage row prices correctly rather than falling through. */
-function priceFor(model: string | null | undefined) {
-  if (!model) return null
-  return PRICING[model.replace(/-failed$/, '')] ?? null
-}
-
-// Cache tokens are billed at a multiple of the input rate: writing an entry
-// costs 1.25x, reading one costs 0.1x. Counting them as free (or not at all)
-// understates spend on every cached request.
-const CACHE_WRITE_MULTIPLIER = 1.25
-const CACHE_READ_MULTIPLIER = 0.1
-
-interface PricedRow {
-  model?: string | null
-  input_tokens?: number | null
-  output_tokens?: number | null
-  cache_creation_input_tokens?: number | null
-  cache_read_input_tokens?: number | null
-}
-
-/** Prices a set of logged queries. Rows predating token logging are skipped
- *  rather than counted as free, and reported separately so a partial total
- *  can be labelled as one. */
+/** Prices a set of logged queries. Rates live in src/lib/pricing.ts, shared with
+ *  the per-query endpoint so the two screens cannot disagree about what the same
+ *  query cost. Rows predating token logging, or naming a model with no published
+ *  price, are skipped rather than counted as free, and reported separately so a
+ *  partial total can be labelled as one. */
 function priceRows(rows: PricedRow[]) {
   let cost = 0
   let sonnetQueries = 0
   let pricedQueries = 0
   for (const r of rows) {
-    if (r.input_tokens == null && r.output_tokens == null) continue
-    const pricing = priceFor(r.model)
-    // A model with no entry above is counted in neither the total nor
-    // pricedQueries, so the dashboard's "N of M priced" caption reports the gap
-    // rather than a confident wrong number.
-    if (!pricing) continue
+    const rowCost = costOfRow(r)
+    if (rowCost == null) continue
     pricedQueries++
     if (r.model?.includes('sonnet')) sonnetQueries++
-    // input_tokens is only the uncached remainder once prompt caching is on —
-    // the cached portions are billed separately, not for free.
-    cost += ((r.input_tokens ?? 0) / 1_000_000) * pricing.input
-    cost += ((r.cache_creation_input_tokens ?? 0) / 1_000_000) * pricing.input * CACHE_WRITE_MULTIPLIER
-    cost += ((r.cache_read_input_tokens ?? 0) / 1_000_000) * pricing.input * CACHE_READ_MULTIPLIER
-    cost += ((r.output_tokens ?? 0) / 1_000_000) * pricing.output
+    cost += rowCost
   }
   return { cost, sonnetQueries, pricedQueries }
 }

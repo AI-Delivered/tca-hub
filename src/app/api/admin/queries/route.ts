@@ -15,15 +15,13 @@
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { secretMatches } from '@/lib/auth'
 import { UNANSWERED_ILIKE, saidItCouldNotAnswer, unansweredOrFilter } from '@/lib/unanswered'
+import { costOfRow } from '@/lib/pricing'
 
 export const maxDuration = 30
 
-// Same table as src/app/api/admin/stats/route.ts. Kept in sync by hand; if they
-// ever disagree, stats is the one that has been checked against a real bill.
-const PRICING: Record<'haiku' | 'sonnet', { input: number; output: number }> = {
-  haiku: { input: 1.0, output: 5.0 },
-  sonnet: { input: 3.0, output: 15.0 },
-}
+// Rates live in src/lib/pricing.ts, shared with the stats route. This file used
+// to hold its own copy "kept in sync by hand", which is how nano ended up priced
+// as Haiku here while the totals elsewhere disagreed.
 
 const PAGE_SIZE_DEFAULT = 25
 const PAGE_SIZE_MAX = 100
@@ -81,14 +79,7 @@ function isMissingColumn(error: { code?: string; message?: string } | null): boo
   return /column .* does not exist|could not find the .* column/i.test(error.message ?? '')
 }
 
-function costOf(row: Row): number | null {
-  if (row.input_tokens == null && row.output_tokens == null) return null
-  const pricing = row.model?.includes('sonnet') ? PRICING.sonnet : PRICING.haiku
-  return (
-    ((row.input_tokens ?? 0) / 1_000_000) * pricing.input +
-    ((row.output_tokens ?? 0) / 1_000_000) * pricing.output
-  )
-}
+const costOf = (row: Row): number | null => costOfRow(row)
 
 // See lib/unanswered.ts for what "thin" means and why it stopped meaning
 // "low similarity".
