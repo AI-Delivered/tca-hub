@@ -235,6 +235,22 @@ body {
   letter-spacing: 0.03em;
 }
 
+/* The "what is missing" note under the homepage chips.
+ *
+ * Deliberately the quietest text on the page: it is worth reading once and then
+ * never again, and it sits below the two things a parent actually came for. Width
+ * is capped so it wraps to two or three short lines rather than one long one on a
+ * wide screen, and it is centred with the hero it belongs to. */
+.tca-notice {
+  max-width: 34rem;
+  margin: var(--space-3) auto 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  text-align: center;
+  text-wrap: pretty;
+}
+
 .tca-bg-glow {
   position: fixed;
   /* Not inset: 0. A fixed box is sized to the SMALL viewport — the one that

@@ -1081,6 +1081,19 @@ export default function Home() {
                   Staff Directory
                 </a>
               </div>
+
+              {/* What is still missing, said before anyone asks.
+                  A parent who asks about something from the weekly newsletter and
+                  gets nothing has no way to tell a permanent hole from a source
+                  that has not arrived yet, and the difference decides whether they
+                  come back. The same sentiment closes an answer that admits a gap
+                  (GAP_NOTE, src/lib/unanswered.ts) — keep the two saying the same
+                  thing if either changes. */}
+              <p className="tca-notice">
+                We&rsquo;re working with TCA to bring the weekly newsletters in. That hasn&rsquo;t
+                happened yet, so details that only appear in a newsletter can still be missing —
+                it gets better every week.
+              </p>
             </>
           )}
         </div>
