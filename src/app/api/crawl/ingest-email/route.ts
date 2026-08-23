@@ -4,6 +4,7 @@ import { isCrawlAuthorized } from '@/lib/auth'
 import { storeChunks, sanitizeForPostgres } from '@/lib/ingest-chunks'
 import { withIngestLog } from '@/lib/ingest-log'
 import { identityRefusal } from '@/lib/school-identity'
+import { supersedePattern } from '@/lib/smore'
 import { fetchSmoreNewsletter, parseSmoreUrl } from '@/lib/smore'
 
 export const maxDuration = 300
@@ -74,6 +75,7 @@ interface Body {
   redact?: unknown
   dryRun?: unknown
   allowUnverifiedSchool?: unknown
+  publication?: unknown
 }
 
 function asStringArray(v: unknown): string[] {
@@ -164,6 +166,8 @@ async function smoreIngest(opts: {
   redact: string[]
   dryRun: boolean
   allowUnverifiedSchool: boolean
+  /** Names the publication when the URL cannot — see supersedePattern. */
+  publication: string
 }): Promise<NextResponse> {
   const { supabase, today, smoreUrl, until, title, redact, dryRun, allowUnverifiedSchool } = opts
 
@@ -175,6 +179,9 @@ async function smoreIngest(opts: {
   let issue
   try {
     issue = await fetchSmoreNewsletter(smoreUrl)
+    // An explicit name beats anything worked out from the page: the caller can see
+    // the newsletter and this cannot.
+    if (opts.publication) issue = { ...issue, publicationSlug: opts.publication, publicationSource: 'url' as const }
   } catch (err) {
     // Surfaced rather than swallowed: every way this fails — unrendered SPA,
     // main-content stripping, a missing key — produces an empty page, and an
@@ -230,6 +237,15 @@ async function smoreIngest(opts: {
     return NextResponse.json({
       mode: 'dryRun', source: 'smore', key, title: heading,
       issueDate: issue.issueDate, expires: expiry,
+      // Which publication this was filed under and how that was decided: 'title'
+      // is a guess that works until the newsletter renames itself, and a dry run
+      // is where someone can catch that before it supersedes the wrong thing.
+      publication: issue.publicationSlug, publicationSource: issue.publicationSource,
+      supersedes: supersedePattern(issue.publicationSlug),
+      // What the issue links out to. These are not ingested — knowing what is
+      // there is the first step, and an issue that links twelve grade-level PDFs
+      // is a different proposition from one that links a lunch menu.
+      documents: issue.documents,
       chars: redacted.length, redactions: hits,
       preview: redacted.slice(0, 500),
     })
@@ -243,9 +259,23 @@ async function smoreIngest(opts: {
    * and every issue would pile up — a month of East newsletters answering the
    * same question four different ways. The trailing slug is what is stable
    * (`…-tca-east-elementary-news` on every East issue), so that is the range to
-   * clear. `parseSmoreUrl` has already refused anything but `[a-z0-9-]`, so no
-   * ilike wildcard can reach this pattern. */
-  await supabase.from('page_chunks').delete().ilike('url', `%-${issue.publicationSlug}%`)
+   * clear.
+   *
+   * The pattern is built by supersedePattern, which returns null for anything it
+   * cannot vouch for, and this refuses rather than substituting a default. An
+   * empty slug here produces `%-%` — an ilike that matches nearly every url in
+   * the corpus and would delete the lot on the way to storing one newsletter.
+   * That is the entire reason a URL with no slug in it is resolved before this
+   * line rather than after. */
+  const pattern = supersedePattern(issue.publicationSlug)
+  if (!pattern) {
+    return NextResponse.json({
+      error: `could not work out which publication ${issue.url} belongs to. The URL carries no slug, ` +
+        `the redirect did not supply one, and the title ("${issue.title}") did not reduce to a usable name. ` +
+        `Re-send with publication=<name> — nothing was stored, and nothing was deleted.`,
+    }, { status: 422 })
+  }
+  await supabase.from('page_chunks').delete().ilike('url', pattern)
 
   const { VoyageAIClient } = await import('voyageai')
   const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })
@@ -289,6 +319,7 @@ async function run(req: NextRequest) {
   const text = typeof body.text === 'string' ? body.text.trim() : ''
   const until = typeof body.until === 'string' ? body.until.trim() : ''
   const smoreUrl = typeof body.url === 'string' ? body.url.trim() : ''
+  const publication = typeof body.publication === 'string' ? body.publication.trim().toLowerCase() : ''
   const dryRun = body.dryRun === true
   const allowUnverifiedSchool = body.allowUnverifiedSchool === true
 
@@ -297,7 +328,7 @@ async function run(req: NextRequest) {
       return NextResponse.json({ error: 'pass url or text, not both' }, { status: 400 })
     }
     return smoreIngest({
-      supabase, today, smoreUrl, until, title,
+      supabase, today, smoreUrl, until, title, publication,
       redact: asStringArray(body.redact), dryRun, allowUnverifiedSchool,
     })
   }
