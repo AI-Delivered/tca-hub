@@ -14,7 +14,7 @@
 
 import {
   assemblePieces, assembleByUrl, datedLines, nextEventsByLevel, levelsAskedFor, isGame, isPractice,
-  eventsInRange,
+  eventsInRange, finishedToday, finishedTodayNote,
 } from '../src/lib/schedule.ts'
 
 let failures = 0
@@ -248,6 +248,54 @@ check('a fixture the week after is out of range',
 // An all-day entry inside the range counts, so "is there school next week" works.
 check('an all-day no-school day is in the week',
   eventsInRange('2026-08-21 (Friday) — No School', RANGE).total, 1)
+
+console.log('\n— an event that was earlier today —\n')
+
+/* Reported: at 9:58 PM a parent asked when the 8th grade dinner dance was and was
+ * told it "is listed ... Monday, August 24, 2026 — 6:00 PM–8:00 PM". The event had
+ * finished two hours earlier and was given in the present tense. Every comparison
+ * in the app was date-granular, and the system prompt said outright that today's
+ * events are current — so 9:58 PM and 6:00 PM were the same thing to all of it. */
+const DANCE = '2026-08-24 (Monday) 6:00 PM–8:00 PM — 8th Grade Dinner Dance @ The Classical Academy North Campus Main Gym'
+const TONIGHT = '2026-08-24 (Monday) 10:30 PM–11:30 PM — Late Night Open Gym @ North Campus'
+const TOMORROW = '[Volleyball Varsity (Girls)] 2026-08-25 (Tuesday) 6:00 PM–7:30 PM: TCA vs Atlas Preparatory @ Main Gym'
+const AT_9_58_PM = { today: '2026-08-24', nowMinutes: 21 * 60 + 58 }
+
+check('the dance is read as ending at 8:00 PM', datedLines(DANCE)[0].endMinutes, 20 * 60)
+check('at 9:58 PM it is over', finishedToday(DANCE, AT_9_58_PM).length, 1)
+check('at 7:00 PM, while it is running, it is not',
+  finishedToday(DANCE, { today: '2026-08-24', nowMinutes: 19 * 60 }).length, 0)
+check('an event later tonight is not over', finishedToday(TONIGHT, AT_9_58_PM).length, 0)
+check('and neither is one tomorrow', finishedToday(TOMORROW, AT_9_58_PM).length, 0)
+
+const note = finishedTodayNote([DANCE, TONIGHT, TOMORROW].join('\n'), AT_9_58_PM)
+checkTrue('the note names the dance', note.includes('8th Grade Dinner Dance'))
+checkTrue('and forbids announcing it as tonight', note.includes('Do not present any of them as upcoming'))
+checkTrue('and asks for the plain truth instead', note.includes('was earlier today'))
+checkTrue('it does not name the event still to come', !note.includes('Late Night Open Gym'))
+check('nothing over, no note', finishedTodayNote(TOMORROW, AT_9_58_PM), '')
+
+/* An event with no end time gets a grace period rather than being called over the
+ * minute it starts — a 6:00 PM entry is not finished at 6:01. */
+const NO_END = '2026-08-24 (Monday) 6:00 PM — 8th Grade Dinner Dance'
+check('an open-ended event is still running at 7:00 PM',
+  finishedToday(NO_END, { today: '2026-08-24', nowMinutes: 19 * 60 }).length, 0)
+check('and is over well after it', finishedToday(NO_END, AT_9_58_PM).length, 1)
+// An all-day entry has no clock at all and is never "finished" by time of day.
+check('an all-day event is not timed out', finishedToday('2026-08-24 (Monday) — No School', AT_9_58_PM).length, 0)
+
+// And the next-game filter must not offer this afternoon's fixture tonight.
+const PLAYED = '[Volleyball Varsity (Girls)] 2026-08-24 (Monday) 4:30 PM–6:00 PM: TCA vs Palmer Ridge @ Main Gym'
+check('a fixture played this afternoon is not the next game', nextEventsByLevel(
+  datedLines([PLAYED, TOMORROW].join('\n')), { today: '2026-08-24', kind: 'game', nowMinutes: 21 * 60 + 58 }
+).map(e => e.ymd), ['2026-08-25'])
+check('at 5:00 PM, mid-match, it still is', nextEventsByLevel(
+  datedLines([PLAYED, TOMORROW].join('\n')), { today: '2026-08-24', kind: 'game', nowMinutes: 17 * 60 }
+).map(e => e.ymd), ['2026-08-24'])
+// Without a clock the behaviour is unchanged, so no caller gets a surprise.
+check('a caller that knows only the date is unaffected', nextEventsByLevel(
+  datedLines([PLAYED, TOMORROW].join('\n')), { today: '2026-08-24', kind: 'game' }
+).map(e => e.ymd), ['2026-08-24'])
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all passed'}\n`)
 process.exit(failures ? 1 : 0)

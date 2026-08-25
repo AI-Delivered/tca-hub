@@ -512,17 +512,41 @@ export interface DatedLine {
   level: string
   /** Minutes past midnight, for ordering events within a day. */
   minutes: number
+  /** When it is over — the end of the range, or the start plus a default length. */
+  endMinutes: number
   line: string
 }
 
 const LEVEL_TAG = /^\[([^\]]+)\]\s*/
-const CLOCK = /(\d{1,2}):(\d{2})\s*(AM|PM)/i
+const CLOCK = /(\d{1,2}):(\d{2})\s*(AM|PM)/gi
 
-function minutesOf(line: string): number {
-  const m = CLOCK.exec(line)
-  if (!m) return 0
-  const hour = Number(m[1]) % 12 + (m[3].toUpperCase() === 'PM' ? 12 : 0)
-  return hour * 60 + Number(m[2])
+function toMinutes(match: RegExpMatchArray): number {
+  const hour = Number(match[1]) % 12 + (match[3].toUpperCase() === 'PM' ? 12 : 0)
+  return hour * 60 + Number(match[2])
+}
+
+/* Both ends of an event, not just the start.
+ *
+ * A line reads `2026-08-24 (Monday) 6:00 PM–8:00 PM — 8th Grade Dinner Dance`, and
+ * only the start was ever read — which is fine for ordering a day and useless for
+ * the question that matters at ten at night: is this thing over? Every comparison
+ * in this app was date-granular, so an event that ended at eight was still
+ * "today's event, current and valid to cite" two hours later.
+ *
+ * An event with no end time is treated as running for DEFAULT_LENGTH_MIN. That is a
+ * guess, and it is the safe direction: an hour and a half of grace means a
+ * still-running event is never called finished, at the cost of one that ended early
+ * being called current for a while longer. */
+const DEFAULT_LENGTH_MIN = 90
+
+function timesOf(line: string): { minutes: number; endMinutes: number } {
+  const found = [...line.matchAll(CLOCK)].map(toMinutes)
+  if (!found.length) return { minutes: 0, endMinutes: 0 }
+  const start = found[0]
+  const end = found.length > 1 ? found[found.length - 1] : start + DEFAULT_LENGTH_MIN
+  // A range that appears to end before it starts has crossed midnight or is a
+  // scoreline being read as a clock; the start is the only thing worth trusting.
+  return { minutes: start, endMinutes: end > start ? end : start + DEFAULT_LENGTH_MIN }
 }
 
 /** Every dated event line in some schedule text, deduplicated and in time order.
@@ -541,7 +565,7 @@ export function datedLines(text: string): DatedLine[] {
     out.push({
       ymd,
       level: line.match(LEVEL_TAG)?.[1]?.trim() ?? '',
-      minutes: minutesOf(line),
+      ...timesOf(line),
       line,
     })
   }
@@ -582,6 +606,43 @@ export function eventsInRange(
     ? inRange.filter(l => new RegExp(`\\b${opts.sport}\\b`, 'i').test(l.line))
     : inRange
   return { events: scoped, total: scoped.length }
+}
+
+/* Events that were today and are over, said out loud.
+ *
+ * Reported: at 9:58 PM a parent asked when the 8th grade dinner dance was, and was
+ * told it "is listed ... Monday, August 24, 2026 — 6:00 PM–8:00 PM" — an event that
+ * had finished two hours earlier, in the present tense, with no hint it had already
+ * happened. Neither the next-event filter nor the week filter fires on a
+ * named-event question like that one, so neither of them could have helped; and the
+ * system prompt was actively against it, asserting that "today's events are current
+ * and valid to cite" with no mention of the clock.
+ *
+ * Nothing here knows whether the event was real — that is a question about the
+ * corpus. What it does know is that an event whose end time has passed is not
+ * something to announce as upcoming, and that is worth saying whatever the question
+ * was. */
+export function finishedToday(
+  text: string,
+  opts: { today: string; nowMinutes: number }
+): DatedLine[] {
+  return datedLines(text).filter(l =>
+    l.ymd === opts.today && l.endMinutes > 0 && l.endMinutes <= opts.nowMinutes)
+}
+
+/** The note naming them, or '' when nothing in the context has finished. */
+export function finishedTodayNote(
+  text: string,
+  opts: { today: string; nowMinutes: number }
+): string {
+  const over = finishedToday(text, opts)
+  if (!over.length) return ''
+  const MAX = 12
+  return `Already over. These events in your context were earlier today and have finished:\n` +
+    `${over.slice(0, MAX).map(l => l.line).join('\n')}\n` +
+    `Do not present any of them as upcoming or as happening tonight. If the parent asks about one, ` +
+    `say plainly that it was earlier today and has already taken place, and give the time it ran. ` +
+    `An event still running has not finished and is not on this list.`
 }
 
 /* What the two kinds of question are asking for.
@@ -634,11 +695,17 @@ export interface NextEvent {
  * than allowed to stand in for one. */
 export function nextEventsByLevel(
   lines: DatedLine[],
-  opts: { today: string; kind: 'game' | 'practice' }
+  /* `nowMinutes` is what stops an event that finished this afternoon being offered
+   * as the next one this evening. Optional, because a caller that genuinely only
+   * knows the date still gets the old behaviour rather than an accidental one. */
+  opts: { today: string; kind: 'game' | 'practice'; nowMinutes?: number }
 ): NextEvent[] {
   const wanted = opts.kind === 'practice' ? isPractice : isGame
+  const overAlready = (l: DatedLine) =>
+    opts.nowMinutes !== undefined && l.ymd === opts.today && l.endMinutes > 0 && l.endMinutes <= opts.nowMinutes
   const earliest = new Map<string, string>()
   for (const l of lines) {
+    if (overAlready(l)) continue
     if (l.ymd < opts.today || !wanted(l.line)) continue
     const prev = earliest.get(l.level)
     if (!prev || l.ymd < prev) earliest.set(l.level, l.ymd)
@@ -648,7 +715,9 @@ export function nextEventsByLevel(
     .map(([level, ymd]) => ({
       level,
       ymd,
-      lines: lines.filter(l => l.level === level && l.ymd === ymd && wanted(l.line)).map(l => l.line),
+      lines: lines
+        .filter(l => l.level === level && l.ymd === ymd && wanted(l.line) && !overAlready(l))
+        .map(l => l.line),
     }))
     .sort((a, b) => a.ymd.localeCompare(b.ymd) || a.level.localeCompare(b.level))
 }

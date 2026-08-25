@@ -8,6 +8,7 @@ import { secretMatches } from '@/lib/auth'
 import { gapNoteFor, withGapNote } from '@/lib/unanswered'
 import {
   DATED_LINE, weekdayNote, assembleByUrl, datedLines, datesIn, eventsInRange, nextEventsByLevel, levelsAskedFor,
+  finishedTodayNote,
   checkAnswerDates, heldBackFrom, isPractice,
 } from '@/lib/schedule'
 
@@ -1109,6 +1110,13 @@ export async function POST(req: NextRequest) {
     /\bnext\s+(one|up)\b/i.test(query)
   const asksNext = (asksNextEvent || asksPlayNext) && !RANGE_WORDS.test(query)
   const todayYmd = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
+  /* The clock, not just the date.
+   *
+   * `now` already holds Denver wall-clock components, so its local getters are the
+   * local time. Everything dated in this route compared whole days until this line
+   * existed, which is how an event that ended at 8:00 PM was still "today's event"
+   * at 9:58 PM. */
+  const nowMinutes = now.getHours() * 60 + now.getMinutes()
 
   let answerContext = context
   let nextNote = ''
@@ -1132,7 +1140,7 @@ export async function POST(req: NextRequest) {
      * a basketball fixture for a volleyball question. */
     const all = datedLines(complete ? scheduleText : context)
       .filter(l => !matchedSport || hasTerm(l.line, matchedSport))
-    const computed = nextEventsByLevel(all, { today: todayYmd, kind })
+    const computed = nextEventsByLevel(all, { today: todayYmd, kind, nowMinutes })
 
     /* Which teams the answer is about.
      *
@@ -1427,7 +1435,7 @@ High school grade levels: 9th = Freshman, 10th = Sophomore, 11th = Junior, 12th 
 
 Be smart about context: sports (football, basketball, soccer, wrestling, cheer, etc.), athletics schedules, and team-specific questions only apply to Junior High and High School — never mention elementary in those answers unless the parent specifically brings it up. Literacy testing (DIBELS, reading assessments, oral reading fluency, etc.) only applies to elementary campuses (Central, East, North) — never reference it for Junior High or High School. If the parent has a 5th grader and asks about football, answer for JH/HS and don't add a note about the elementary student.
 
-Current school year is ${schoolYearLabel}. A date is "past" only if it is before TODAY's date — today's events are current and valid to cite regardless of month. Never dismiss July or August events as "summer break" — TCA runs athletics, camps, and activities year-round including summer. If you only have a past date for a recurring annual event, say "Last year it was [date] — the ${schoolYearLabel} date hasn't been posted yet." Never call a future date "already passed."
+Current school year is ${schoolYearLabel}. A date is "past" only if it is before TODAY's date, and an event earlier TODAY that has already finished is past too — check the time against the current time before calling anything upcoming, and if it has finished say it was earlier today rather than announcing it as tonight's event. Today's events that have not yet happened are current and valid to cite regardless of month. Never dismiss July or August events as "summer break" — TCA runs athletics, camps, and activities year-round including summer. If you only have a past date for a recurring annual event, say "Last year it was [date] — the ${schoolYearLabel} date hasn't been posted yet." Never call a future date "already passed."
 
 Days of the week are given to you, never worked out. A schedule line spells its day out in parentheses — \`2026-08-28 (Friday) 8:00 AM–10:00 AM — JH Picture Day\` — and where the context contains dates you are also handed a computed list pairing each date with the day it falls on. Use those words exactly. Never derive a day name from a date yourself, and never carry one across from a neighbouring event. If a date has no day name in the line and none in that list, give the date on its own — "August 28", not "Thursday, August 28". An omitted day name costs a parent nothing; a wrong one puts their child at school on the wrong morning.
 
@@ -1626,6 +1634,14 @@ Answer style:
    * the later dates it just took away. */
   const dowNote = weekdayNote(answerContext)
 
+  /* Which of today's events are already over.
+   *
+   * Built from `answerContext` like the day-name pairings, and for the same reason:
+   * it has to reach every kind of question, not only the ones a filter fires on.
+   * The reported failure was "when is the eighth grade dinner dance" — no range
+   * word, no "next", so nothing else in this route was looking. */
+  const overNote = finishedTodayNote(answerContext, { today: todayYmd, nowMinutes })
+
   /* Which teams have a TeamReach feed connected.
    *
    * TeamReach groups are joined with a per-team code, so the only feeds we can
@@ -1679,7 +1695,7 @@ Athletics data provenance: game and competition schedules come from GoBound, whi
       text: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current time is approximately ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })} Mountain Time.
 "This week" means ${span(weekStart, 6)}. "Next week" means ${span(nextWeekStart, 6)}. Use those exact ranges — do not work them out again — and when a question uses either phrase, name the dates you are answering for so the parent can check you meant the same week they did.
 
-Match the team as written when reading schedule lines: "Junior Titan Volleyball Camp" is not a JH Volleyball practice, "HS- Boys Basketball" is not volleyball, and a tryout or off-season entry is not a regular practice. Inventing a plausible practice time is the worst failure you can make — a parent will drive their child to it.${dowNote ? `\n\n${dowNote}` : ''}${rangeNote ? `\n\n${rangeNote}` : ''}${nextNote ? `\n\n${nextNote}` : ''}
+Match the team as written when reading schedule lines: "Junior Titan Volleyball Camp" is not a JH Volleyball practice, "HS- Boys Basketball" is not volleyball, and a tryout or off-season entry is not a regular practice. Inventing a plausible practice time is the worst failure you can make — a parent will drive their child to it.${overNote ? `\n\n${overNote}` : ''}${dowNote ? `\n\n${dowNote}` : ''}${rangeNote ? `\n\n${rangeNote}` : ''}${nextNote ? `\n\n${nextNote}` : ''}
 
 ${coverageNote}`,
     },
