@@ -385,7 +385,7 @@ async function discover(pages: string[], indexed: Set<string>, deadline: number)
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return unauthorized()
+  if (!isCrawlAuthorized(req)) return unauthorized(req)
 
   const startedAt = Date.now()
   const { searchParams } = new URL(req.url)
@@ -709,7 +709,7 @@ async function run(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return unauthorized()
+  if (!isCrawlAuthorized(req)) return unauthorized(req)
   return handler(req)
 }
 

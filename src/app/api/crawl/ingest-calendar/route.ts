@@ -120,7 +120,7 @@ function addDays(dateStr: string, days: number): string {
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return unauthorized()
+  if (!isCrawlAuthorized(req)) return unauthorized(req)
 
   const { VoyageAIClient } = await import('voyageai')
   const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })

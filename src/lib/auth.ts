@@ -63,18 +63,43 @@ export function isCrawlAuthorized(req: Request): boolean {
  * is unusable, and it is exactly the fact an operator needs to fix their own app —
  * which is worth more here than withholding it.
  */
-export function unauthorized(): NextResponse {
+export function unauthorized(req?: Request): NextResponse {
+  /* The length of what was *sent*, which is the fastest way to the usual cause.
+   *
+   * Zero means an empty secret arrived — an unset or misspelled shell variable, or
+   * a `.env.local` read from the wrong directory, which is what happened both times
+   * this has come up. That is a different problem from a wrong value, and the two
+   * are indistinguishable from the outside without this number.
+   *
+   * Only the caller's own input is measured. The configured secret's length is not
+   * reported: it is the caller's to compare, by hashing what they hold against what
+   * `vercel env pull` gives them, and this endpoint should not be an oracle for it. */
+  let supplied = 'no Authorization header and no ?secret= parameter'
+  if (req) {
+    const bearer = req.headers.get('authorization')?.replace(/^Bearer /i, '')
+    const param = new URL(req.url).searchParams.get('secret')
+    if (bearer !== undefined && param !== null) {
+      supplied = `bearer of ${bearer.length} characters and ?secret= of ${param.length}`
+    } else if (bearer !== undefined) {
+      supplied = `bearer of ${bearer.length} characters${bearer.length ? '' : ' — an empty secret, so the variable you passed is unset'}`
+    } else if (param !== null) {
+      supplied = `?secret= of ${param.length} characters${param.length ? '' : ' — empty, so the variable you passed is unset'}`
+    }
+  }
+
   const configured = [
     process.env.CRON_SECRET ? 'CRON_SECRET set' : 'CRON_SECRET unset',
     process.env.CRAWL_SECRET ? 'CRAWL_SECRET set' : 'CRAWL_SECRET unset',
   ].join(', ')
   return NextResponse.json({
     error: 'Unauthorized',
+    supplied,
     accepted: [
       'Authorization: Bearer <CRON_SECRET or CRAWL_SECRET>',
       '?secret=<CRAWL_SECRET>  (this form does NOT accept CRON_SECRET)',
     ],
     configured,
-    hint: 'An unset shell variable sends an empty secret, which is refused — check `echo ${#CRAWL_SECRET}` is not 0.',
+    hint: 'An unset shell variable sends an empty secret, which is refused. `.env.local` lives in the repo, ' +
+      'so reading it from another directory finds nothing — check `echo ${#CRAWL_SECRET}` is not 0.',
   }, { status: 401 })
 }

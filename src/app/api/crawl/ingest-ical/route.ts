@@ -239,7 +239,7 @@ function parseDate(dtstr: string): Date {
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return unauthorized()
+  if (!isCrawlAuthorized(req)) return unauthorized(req)
 
   const { VoyageAIClient } = await import('voyageai')
   const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })

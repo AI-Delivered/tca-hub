@@ -98,7 +98,7 @@ function extractFromHtml(html: string): { staff: StaffMember[]; groupIds: string
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return unauthorized()
+  if (!isCrawlAuthorized(req)) return unauthorized(req)
 
   const campusFilter = req.nextUrl.searchParams.get('campus')
   const targets = campusFilter

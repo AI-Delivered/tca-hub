@@ -83,7 +83,7 @@ export async function GET(req: Request) {
     return Response.json({ error: 'Dashboard password is not configured — set ADMIN_PASSWORD.' }, { status: 503 })
   }
   if (!secretMatches(req.headers.get('x-admin-key'), process.env.ADMIN_PASSWORD)) {
-    return unauthorized()
+    return unauthorized(req)
   }
 
   const adminKey = process.env.ANTHROPIC_ADMIN_KEY

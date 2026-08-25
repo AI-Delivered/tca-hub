@@ -75,7 +75,7 @@ async function ask(baseUrl: string, query: string): Promise<{ answer: string; so
 
 export async function GET(req: NextRequest) {
   if (!isCrawlAuthorized(req)) {
-    return unauthorized()
+    return unauthorized(req)
   }
 
   const baseUrl = req.nextUrl.origin

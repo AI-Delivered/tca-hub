@@ -296,7 +296,7 @@ async function smoreIngest(opts: {
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return unauthorized()
+  if (!isCrawlAuthorized(req)) return unauthorized(req)
 
   const supabase = getSupabaseAdmin()
   const now = new Date()

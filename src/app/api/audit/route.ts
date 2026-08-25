@@ -18,7 +18,7 @@ const ANSWER_WINDOW_HOURS = 24
 const MAX_ANSWERS = 500
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return unauthorized()
+  if (!isCrawlAuthorized(req)) return unauthorized(req)
 
   const supabase = getSupabaseAdmin()
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Denver' })

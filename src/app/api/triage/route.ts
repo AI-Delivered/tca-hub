@@ -59,7 +59,7 @@ async function ask(baseUrl: string, query: string): Promise<string> {
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return unauthorized()
+  if (!isCrawlAuthorized(req)) return unauthorized(req)
 
   const supabase = getSupabaseAdmin()
   const baseUrl = req.nextUrl.origin

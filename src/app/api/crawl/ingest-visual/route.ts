@@ -125,7 +125,7 @@ async function extractPage(
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return unauthorized()
+  if (!isCrawlAuthorized(req)) return unauthorized(req)
 
   const { VoyageAIClient } = await import('voyageai')
   const { default: Anthropic } = await import('@anthropic-ai/sdk')
@@ -190,7 +190,7 @@ async function run(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return unauthorized()
+  if (!isCrawlAuthorized(req)) return unauthorized(req)
   return handler(req)
 }
 

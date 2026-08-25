@@ -166,7 +166,7 @@ export async function GET(req: Request) {
     return Response.json({ error: 'Dashboard password is not configured — set ADMIN_PASSWORD.' }, { status: 503 })
   }
   if (!isAuthorized(req)) {
-    return unauthorized()
+    return unauthorized(req)
   }
 
   const { searchParams } = new URL(req.url)

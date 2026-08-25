@@ -161,7 +161,7 @@ function detectGrade(label: string): string | null {
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return unauthorized()
+  if (!isCrawlAuthorized(req)) return unauthorized(req)
 
   const { searchParams } = new URL(req.url)
   const dryRun = searchParams.get('dryRun') === '1'
@@ -259,7 +259,7 @@ async function run(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return unauthorized()
+  if (!isCrawlAuthorized(req)) return unauthorized(req)
   return handler(req)
 }
 

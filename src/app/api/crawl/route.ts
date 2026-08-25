@@ -203,7 +203,7 @@ async function crawlOne(url: string): Promise<{ text: string; title: string; lin
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return unauthorized()
+  if (!isCrawlAuthorized(req)) return unauthorized(req)
 
   const startedAt = Date.now()
   const { VoyageAIClient } = await import('voyageai')
