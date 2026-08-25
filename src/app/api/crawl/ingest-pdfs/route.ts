@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
-import { isCrawlAuthorized } from '@/lib/auth'
+import { isCrawlAuthorized, unauthorized } from '@/lib/auth'
 import { sanitizeForPostgres } from '@/lib/ingest-chunks'
 import { normalizeContent } from '@/lib/normalize-content'
 import { looksBinary } from '@/lib/looks-binary'
@@ -385,7 +385,7 @@ async function discover(pages: string[], indexed: Set<string>, deadline: number)
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isCrawlAuthorized(req)) return unauthorized()
 
   const startedAt = Date.now()
   const { searchParams } = new URL(req.url)
@@ -709,7 +709,7 @@ async function run(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isCrawlAuthorized(req)) return unauthorized()
   return handler(req)
 }
 

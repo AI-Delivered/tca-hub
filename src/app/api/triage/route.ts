@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getCache } from '@vercel/functions'
 import { getSupabaseAdmin } from '@/lib/supabase'
-import { isCrawlAuthorized } from '@/lib/auth'
+import { isCrawlAuthorized, unauthorized } from '@/lib/auth'
 import { withIngestLog } from '@/lib/ingest-log'
 import { answerCacheKey } from '@/lib/query-key'
 import { datesIn } from '@/lib/schedule'
@@ -59,7 +59,7 @@ async function ask(baseUrl: string, query: string): Promise<string> {
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isCrawlAuthorized(req)) return unauthorized()
 
   const supabase = getSupabaseAdmin()
   const baseUrl = req.nextUrl.origin

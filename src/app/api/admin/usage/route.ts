@@ -1,4 +1,4 @@
-import { secretMatches } from '@/lib/auth'
+import { secretMatches, unauthorized } from '@/lib/auth'
 
 export const maxDuration = 30
 
@@ -83,7 +83,7 @@ export async function GET(req: Request) {
     return Response.json({ error: 'Dashboard password is not configured — set ADMIN_PASSWORD.' }, { status: 503 })
   }
   if (!secretMatches(req.headers.get('x-admin-key'), process.env.ADMIN_PASSWORD)) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    return unauthorized()
   }
 
   const adminKey = process.env.ANTHROPIC_ADMIN_KEY

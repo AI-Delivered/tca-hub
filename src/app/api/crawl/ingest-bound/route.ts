@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
-import { isCrawlAuthorized } from '@/lib/auth'
+import { isCrawlAuthorized, unauthorized } from '@/lib/auth'
 import { withIngestLog } from '@/lib/ingest-log'
 
 export const maxDuration = 60
@@ -29,7 +29,7 @@ const TCA_SPORTS = [
 ]
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isCrawlAuthorized(req)) return unauthorized()
 
   const { VoyageAIClient } = await import('voyageai')
   const voyage = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY })

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
-import { isCrawlAuthorized } from '@/lib/auth'
+import { isCrawlAuthorized, unauthorized } from '@/lib/auth'
 import { fetchAllUrls } from '@/lib/page-urls'
 import { pageBody } from '@/lib/page-body'
 import { normalizeContent } from '@/lib/normalize-content'
@@ -203,7 +203,7 @@ async function crawlOne(url: string): Promise<{ text: string; title: string; lin
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isCrawlAuthorized(req)) return unauthorized()
 
   const startedAt = Date.now()
   const { VoyageAIClient } = await import('voyageai')

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
-import { isCrawlAuthorized } from '@/lib/auth'
+import { isCrawlAuthorized, unauthorized } from '@/lib/auth'
 import { storeChunks, sanitizeForPostgres } from '@/lib/ingest-chunks'
 import { withIngestLog } from '@/lib/ingest-log'
 import { identityRefusal } from '@/lib/school-identity'
@@ -296,7 +296,7 @@ async function smoreIngest(opts: {
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isCrawlAuthorized(req)) return unauthorized()
 
   const supabase = getSupabaseAdmin()
   const now = new Date()

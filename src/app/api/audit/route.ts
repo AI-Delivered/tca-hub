@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
-import { isCrawlAuthorized } from '@/lib/auth'
+import { isCrawlAuthorized, unauthorized } from '@/lib/auth'
 import { withIngestLog } from '@/lib/ingest-log'
 import { runAudit, type Chunk, type LoggedAnswer } from '@/lib/audit'
 
@@ -18,7 +18,7 @@ const ANSWER_WINDOW_HOURS = 24
 const MAX_ANSWERS = 500
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isCrawlAuthorized(req)) return unauthorized()
 
   const supabase = getSupabaseAdmin()
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Denver' })

@@ -23,7 +23,7 @@ interface FeedbackRow {
   answer: string | null
   note: string | null
 }
-import { secretMatches } from '@/lib/auth'
+import { secretMatches, unauthorized } from '@/lib/auth'
 
 export const maxDuration = 30
 
@@ -177,7 +177,7 @@ export async function GET(req: Request) {
     return Response.json({ error: 'Dashboard password is not configured — set ADMIN_PASSWORD.' }, { status: 503 })
   }
   if (!isAuthorized(req)) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    return unauthorized()
   }
   const { searchParams } = new URL(req.url)
   const days = Math.min(Math.max(Number(searchParams.get('days') ?? 30), 1), 90)

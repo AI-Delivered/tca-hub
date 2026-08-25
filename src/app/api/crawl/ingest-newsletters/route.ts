@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
-import { isCrawlAuthorized } from '@/lib/auth'
+import { isCrawlAuthorized, unauthorized } from '@/lib/auth'
 import { storeChunks, sanitizeForPostgres } from '@/lib/ingest-chunks'
 import { withIngestLog } from '@/lib/ingest-log'
 
@@ -161,7 +161,7 @@ function detectGrade(label: string): string | null {
 }
 
 async function run(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isCrawlAuthorized(req)) return unauthorized()
 
   const { searchParams } = new URL(req.url)
   const dryRun = searchParams.get('dryRun') === '1'
@@ -259,7 +259,7 @@ async function run(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isCrawlAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isCrawlAuthorized(req)) return unauthorized()
   return handler(req)
 }
 

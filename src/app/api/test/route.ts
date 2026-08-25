@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isCrawlAuthorized } from '@/lib/auth'
+import { isCrawlAuthorized, unauthorized } from '@/lib/auth'
 
 export const maxDuration = 300
 
@@ -75,7 +75,7 @@ async function ask(baseUrl: string, query: string): Promise<{ answer: string; so
 
 export async function GET(req: NextRequest) {
   if (!isCrawlAuthorized(req)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return unauthorized()
   }
 
   const baseUrl = req.nextUrl.origin
