@@ -14,7 +14,7 @@
 
 import {
   assemblePieces, assembleByUrl, datedLines, nextEventsByLevel, levelsAskedFor, isGame, isPractice,
-  eventsInRange, finishedToday, finishedTodayNote,
+  eventsInRange, finishedToday, finishedTodayNote, namedSport,
 } from '../src/lib/schedule.ts'
 
 let failures = 0
@@ -296,6 +296,29 @@ check('at 5:00 PM, mid-match, it still is', nextEventsByLevel(
 check('a caller that knows only the date is unaffected', nextEventsByLevel(
   datedLines([PLAYED, TOMORROW].join('\n')), { today: '2026-08-24', kind: 'game' }
 ).map(e => e.ymd), ['2026-08-24'])
+
+console.log('\n— a word that only looks like a sport —\n')
+
+/* "When is the eighth grade dinner dance" was routed as an athletics question,
+ * because `dance` is a sport here and the word was in the question. The GoBound
+ * anchors fired at 0.90, the model was handed a wall of dated lines with clock
+ * times and North Campus venues, and it answered a social-calendar question out of
+ * the athletics schedule — down to "6:00 PM–8:00 PM at North Campus Main Gym". */
+check('a dinner dance is not the dance team', namedSport('when is the eighth grade dinner dance'), undefined)
+check('nor is the 8th grade dinner dance', namedSport('when is the 8th grade dinner dance'), undefined)
+check('nor a homecoming dance', namedSport('what time is the homecoming dance'), undefined)
+check('nor a father-daughter dance', namedSport('is there a father-daughter dance this year'), undefined)
+check('nor a winter formal dance', namedSport('when is the winter dance'), undefined)
+
+// The dance team is still a sport, which is the whole reason the word is listed.
+check('the dance team is', namedSport('when does the dance team compete'), 'dance')
+check('and a dance practice is', namedSport('when is dance practice'), 'dance')
+check('every other sport is unaffected', [
+  namedSport('when is the next volleyball game'),
+  namedSport('who is the football coach'),
+  namedSport('does TCA have cross country'),
+  namedSport('when is the band concert'),
+], ['volleyball', 'football', 'cross country', undefined])
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all passed'}\n`)
 process.exit(failures ? 1 : 0)

@@ -749,6 +749,39 @@ const TEAM_RULES: Array<{ name: string; group: string; ask: RegExp; tag: RegExp;
   { name: 'boys', group: 'sex', ask: /\b(boys?|mens?)\b/i, tag: /\(boys\)/i },
 ]
 
+/* Which sport a question names — and which words only look like one.
+ *
+ * "When is the eighth grade dinner dance" was routed as an athletics question,
+ * because `dance` is a sport here (TCA has a dance team) and the word is in the
+ * question. So the athletics anchors fired at 0.90 and handed the model GoBound's
+ * schedule: a wall of dated lines with clock times and North Campus venues. The
+ * answer it produced — "6:00 PM–8:00 PM at The Classical Academy North Campus Main
+ * Gym" — is that context, reassembled around an event the corpus never mentioned.
+ *
+ * The route's own comment already worked out the principle for a different pair of
+ * words: "match" and "meet" are absent from the sport list because as bare words
+ * they are more often ordinary English than sport. `dance` is the same problem
+ * arriving from the other direction — it is a real sport *and* the last word of half
+ * the social calendar. A dinner dance, a homecoming dance and a father-daughter
+ * dance are not the dance team, and reading them as athletics is how a question
+ * about one gets answered from the other's schedule.
+ */
+export const SPORT_NAMES = [
+  'football', 'basketball', 'soccer', 'volleyball', 'baseball', 'softball',
+  'track', 'swim', 'cross country', 'wrestling', 'lacrosse', 'tennis', 'golf', 'cheer', 'dance',
+]
+
+/** Contexts in which a sport word is not the sport. */
+const NOT_THE_SPORT: Record<string, RegExp> = {
+  dance: /\b(?:dinner|homecoming|winter|spring|fall|formal|sadie|father|mother|daughter|son|welcome|8th|eighth|school)[-\s]+dance\b/i,
+}
+
+/** The sport a question is about, or undefined if it names none. */
+export function namedSport(query: string): string | undefined {
+  return SPORT_NAMES.find(sport =>
+    new RegExp(`\\b${sport}\\b`, 'i').test(query) && !NOT_THE_SPORT[sport]?.test(query))
+}
+
 /** The level tags matching the team the parent named, or [] if they named none.
  *
  * [] is not "no teams" but "they did not say" — the caller then answers for every

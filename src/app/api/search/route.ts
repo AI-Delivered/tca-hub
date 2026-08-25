@@ -8,7 +8,7 @@ import { secretMatches } from '@/lib/auth'
 import { gapNoteFor, withGapNote } from '@/lib/unanswered'
 import {
   DATED_LINE, weekdayNote, assembleByUrl, datedLines, datesIn, eventsInRange, nextEventsByLevel, levelsAskedFor,
-  finishedTodayNote,
+  finishedTodayNote, namedSport, SPORT_NAMES,
   checkAnswerDates, heldBackFrom, isPractice,
 } from '@/lib/schedule'
 
@@ -129,10 +129,8 @@ function hasTerm(text: string, term: string): boolean {
 // "meet" are deliberately absent: as bare words they're far more often ordinary
 // English ("match my student to a teacher", "PTO meeting") than sports, and real
 // uses — "volleyball match", "track meet" — already carry a sport name.
-const SPORT_NAMES = [
-  'football', 'basketball', 'soccer', 'volleyball', 'baseball', 'softball',
-  'track', 'swim', 'cross country', 'wrestling', 'lacrosse', 'tennis', 'golf', 'cheer', 'dance',
-]
+// SPORT_NAMES and namedSport live in @/lib/schedule now, where they can be tested
+// against the questions that only look like sport — see the note there on `dance`.
 const SPORT_TERMS = [
   ...SPORT_NAMES,
   'scrimmage', 'game', 'games', 'tournament', 'playoff', 'playoffs', 'championship',
@@ -451,6 +449,15 @@ export async function POST(req: NextRequest) {
     'their', 'there', 'tca', 'school', 'have', 'has', 'had', 'can', 'i', 'me', 'we', 'you', 'it', 'that', 'this',
     'be', 'with', 'about', 'any', 'get', 'go', 'us', 'from', 'if', 'so', 'll', 's'])
 
+  /* Phrases whose every word carries meaning — a name, not a fragment of a
+   * sentence. "dinner dance" qualifies; "time does school start" does not, because
+   * `does` is filler and the question it comes from is one the app answers well. */
+  const ALL_CONTENT_WORDS = (phrase: string) => {
+    const words = phrase.split(' ')
+    return words.length >= 2 && words.every(w => w.length >= 4 && !PHRASE_STOP.has(w))
+  }
+  let missingPhrases: string[] = []
+
   const phraseWords = query.toLowerCase().replace(/[^\w\s'’-]/g, ' ').split(/\s+/).filter(Boolean)
   const candidates: string[] = []
   // Longest first: "titans for christ meet" is tried before "titans for christ",
@@ -467,7 +474,18 @@ export async function POST(req: NextRequest) {
   }
 
   if (candidates.length) {
-    const found = await Promise.all(candidates.map(async phrase => {
+    /* Searched as written and with ordinals in figures.
+     *
+     * A parent types "eighth grade dinner dance"; the school writes "8th Grade
+     * Dinner Dance". Without this the anchor misses every ordinal-named thing in
+     * the corpus — and, now that a zero result is reported to the model, a spelling
+     * difference would read as an absence. The map already existed for staff roles.
+     */
+    const asFigures = (phrase: string) =>
+      phrase.split(' ').map(w => ORDINALS[w] ?? w).join(' ')
+    const searchable = [...new Set(candidates.flatMap(c => [c, asFigures(c)]))]
+
+    const found = await Promise.all(searchable.map(async phrase => {
       /* Cap at 9 so a phrase matching more than 8 chunks is recognised as
        * ordinary vocabulary and skipped — an anchor is only justified when the
        * phrase actually pins down a small set of pages. */
@@ -479,6 +497,27 @@ export async function POST(req: NextRequest) {
         .limit(9)
       return { phrase, rows: data ?? [] }
     }))
+
+    /* A phrase the corpus does not contain at all — which this already knew.
+     *
+     * These searches run over every chunk, not over what retrieval returned, so a
+     * phrase with zero rows is a fact about the whole corpus: nothing in it
+     * mentions this thing. That was being computed and thrown away, and the cost
+     * showed up as the most confident kind of wrong answer. Asked "when is the
+     * eighth grade dinner dance", the corpus contained no "dinner dance" anywhere;
+     * the search said so; nothing passed it on; and the model — holding the
+     * athletics schedule, today's date, and a prompt telling it to lead with the
+     * answer and never hedge — produced "Monday, August 24, 2026 — 6:00 PM–8:00 PM"
+     * with a citation. Every ingredient of that answer was in its context except
+     * the event.
+     *
+     * Only phrases made entirely of content words count. "time does school start"
+     * matches nothing either, and a question this app answers perfectly must not be
+     * hedged because a four-word fragment of it is absent. */
+    const missing = found.filter(f => !f.rows.length && ALL_CONTENT_WORDS(f.phrase))
+    if (missing.length && !found.some(f => f.rows.length)) {
+      missingPhrases = missing.map(f => f.phrase).slice(0, 3)
+    }
 
     // Longest phrase that is distinctive enough to be worth anchoring on.
     const best = found.find(f => f.rows.length > 0 && f.rows.length <= 8)
@@ -676,7 +715,14 @@ export async function POST(req: NextRequest) {
    * A subject carries across turns; that is what a follow-up is. Deliberately
    * not applied to `asksNext`, which must keep reading this turn alone or the
    * "next" from a previous question would trim a request to widen the scope. */
-  const isSportsQuery = !daysOffQuery && SPORT_TERMS.some(t => hasTerm(baseQuery, t))
+  /* A sport word that is not the sport does not make this an athletics question.
+   *
+   * "When is the eighth grade dinner dance" scored true here, because `dance` is a
+   * sport and the word is in the question — so the GoBound anchors fired at 0.90
+   * and the model was handed the athletics schedule for a social-calendar question.
+   * See namedSport. */
+  const isSportsQuery = !daysOffQuery && SPORT_TERMS.some(t =>
+    hasTerm(baseQuery, t) && (!SPORT_NAMES.includes(t) || namedSport(baseQuery) === t))
   const calTermMatch = !daysOffQuery ? CAL_EVENT_TERMS.find(t => hasTerm(query, t)) : undefined
 
   // Named sports only (excludes generic words like "game"/"practice"/"tournament") — used to
@@ -689,8 +735,7 @@ export async function POST(req: NextRequest) {
   // This turn first, so "what about volleyball" after a football question
   // switches sport rather than inheriting one; the conversation only supplies a
   // subject the current sentence does not have. See `isSportsQuery` above.
-  const matchedSport =
-    SPORT_NAMES.find(t => hasTerm(query, t)) ?? SPORT_NAMES.find(t => hasTerm(baseQuery, t))
+  const matchedSport = namedSport(query) ?? namedSport(baseQuery)
 
   /* The athletics schedule as whole documents, reassembled from their pieces.
    *
@@ -1642,6 +1687,23 @@ Answer style:
    * word, no "next", so nothing else in this route was looking. */
   const overNote = finishedTodayNote(answerContext, { today: todayYmd, nowMinutes })
 
+  /* What the corpus does not contain, handed over as plainly as the dates are.
+   *
+   * Worded as a conditional rather than a denial on purpose. If a phrase is absent
+   * only because the school spells it differently, the model still has the context
+   * and can find the thing; what it must not do is answer from the shape of a
+   * neighbouring schedule line. The instruction it counterweights is real and
+   * deliberate — "lead with the answer", "never end with a question", "you do not
+   * need to say I'm not sure" — and without something on the other side of the
+   * scale, a nano model with a 0.53 best match will always produce a date. */
+  const missingNote = missingPhrases.length
+    ? `Searched the entire corpus for ${missingPhrases.map(p => `"${p}"`).join(' and ')} — no page contains ` +
+      `${missingPhrases.length > 1 ? 'any of them' : 'it'}. If you cannot find the thing the parent asked ` +
+      `about in the context below, this app does not have it: say so plainly in one line and point them at ` +
+      `the calendar. Do NOT name a date, a time or a venue for it — not from a nearby schedule line, not ` +
+      `from today's date, not from a similar event. An invented date is the worst answer you can give.`
+    : ''
+
   /* Which teams have a TeamReach feed connected.
    *
    * TeamReach groups are joined with a per-team code, so the only feeds we can
@@ -1695,7 +1757,7 @@ Athletics data provenance: game and competition schedules come from GoBound, whi
       text: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' })}. Current time is approximately ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })} Mountain Time.
 "This week" means ${span(weekStart, 6)}. "Next week" means ${span(nextWeekStart, 6)}. Use those exact ranges — do not work them out again — and when a question uses either phrase, name the dates you are answering for so the parent can check you meant the same week they did.
 
-Match the team as written when reading schedule lines: "Junior Titan Volleyball Camp" is not a JH Volleyball practice, "HS- Boys Basketball" is not volleyball, and a tryout or off-season entry is not a regular practice. Inventing a plausible practice time is the worst failure you can make — a parent will drive their child to it.${overNote ? `\n\n${overNote}` : ''}${dowNote ? `\n\n${dowNote}` : ''}${rangeNote ? `\n\n${rangeNote}` : ''}${nextNote ? `\n\n${nextNote}` : ''}
+Match the team as written when reading schedule lines: "Junior Titan Volleyball Camp" is not a JH Volleyball practice, "HS- Boys Basketball" is not volleyball, and a tryout or off-season entry is not a regular practice. Inventing a plausible practice time is the worst failure you can make — a parent will drive their child to it.${missingNote ? `\n\n${missingNote}` : ''}${overNote ? `\n\n${overNote}` : ''}${dowNote ? `\n\n${dowNote}` : ''}${rangeNote ? `\n\n${rangeNote}` : ''}${nextNote ? `\n\n${nextNote}` : ''}
 
 ${coverageNote}`,
     },
